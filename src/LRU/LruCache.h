@@ -124,6 +124,11 @@ class LruCache : public Policy<Key, Value> {
     // 从尾部移除，物理移除（包括映射）
     void evictLeastRecent() {
         auto leastRecent = dummyTail_->prev_.lock();
+        // 排除虚拟头节点
+        if (leastRecent == dummyHead_) {
+            return;
+        }
+        
         removeNode(leastRecent);
         // 从map中移除
         nodeMap_.erase(leastRecent->getKey());

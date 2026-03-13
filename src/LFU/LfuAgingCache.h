@@ -111,9 +111,11 @@ class LfuAgingCache : public Policy<Key, Value> {
     // 移除最不经常使用的节点
     void kickOut() {
         auto node = freqToFreqListMap_[minFreq_]->getLastNode();
-        removeFromList(node);
-        nodeMap_.erase(node->key);
-        decreaseFreq(node->freq);
+        if (node) {
+            removeFromList(node);
+            nodeMap_.erase(node->key);
+            decreaseFreq(node->freq);
+        }
     }
 
     void addToList(NodePtr node) {

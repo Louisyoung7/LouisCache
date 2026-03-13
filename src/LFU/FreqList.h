@@ -64,7 +64,13 @@ class FreqList {
     // 不包括尾节点
     // 用于删除最不经常访问的节点
     NodePtr getLastNode() const {
-        return dummyTail_->prev.lock();
+        auto lastNode = dummyTail_->prev.lock();
+
+        if (lastNode == dummyHead_) {
+            return nullptr;
+        }
+
+        return lastNode;
     }
 
     bool isEmpty() const {
