@@ -70,13 +70,13 @@ class ArcCache : public Policy<Key, Value> {
     bool checkGhostCaches(const Key& key) {
         bool inGhost = false;
         if (lruPart_->checkGhost(key)) {
-            if (lruPart_->increaseCapacity()) {
-                lfuPart_->decreaseCapacity();
+            if (lfuPart_->decreaseCapacity()) {
+                lruPart_->increaseCapacity();
             }
             inGhost = true;
         } else if (lfuPart_->checkGhost(key)) {
-            if (lfuPart_->increaseCapacity()) {
-                lruPart_->decreaseCapacity();
+            if (lruPart_->decreaseCapacity()) {
+                lfuPart_->increaseCapacity();
             }
             inGhost = true;
         }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <memory>
 #include <unordered_map>
 
@@ -8,12 +9,14 @@
 namespace louis::cache {
 template <typename Key, typename Value>
 class LruKCache : public LruCache<Key, Value> {
-    std::unique_ptr<LruCache<Key, Value>> historyList_;  // 访问历史队列，Value存储访问次数
-    std::unordered_map<Key, Value> valueMap_;            // 存储访问历史队列里的缓存项
+    std::unique_ptr<LruCache<Key, size_t>> historyList_;  // 访问历史队列，Value存储访问次数
+    std::unordered_map<Key, Value> valueMap_;             // 存储访问历史队列里的缓存项
     int k_;  // 从访问历史队列移动到主缓存的阈值，一般设置为2
    public:
     LruKCache(int capacity, int historyCapacity, int k = 2)
-        : LruCache<Key, Value>(capacity), historyList_(std::make_unique<LruCache<Key, Value>>(historyCapacity)), k_(k) {
+        : LruCache<Key, Value>(capacity),
+          historyList_(std::make_unique<LruCache<Key, size_t>>(historyCapacity)),
+          k_(k) {
     }
 
     // 添加缓存项
@@ -26,7 +29,7 @@ class LruKCache : public LruCache<Key, Value> {
             LruCache<Key, Value>::put(key, value);
         } else {
             // 不在主缓存中，添加到历史访问队列
-            int accessCount = 0;
+            size_t accessCount = 0;
             // 如果在访问历史队列没有，get 返回的访问次数是0
             historyList_->get(key, accessCount);
             accessCount++;
@@ -51,7 +54,7 @@ class LruKCache : public LruCache<Key, Value> {
             return value;
         }
 
-        int accessCount = 0;
+        size_t accessCount = 0;
         bool inHistory = historyList_->get(key, accessCount);
         if (!inHistory) {
             // 在访问历史队列里也没有，返回空值
@@ -66,8 +69,7 @@ class LruKCache : public LruCache<Key, Value> {
         if (accessCount >= k_) {
             auto it = valueMap_.find(key);
             if (it != valueMap_.end()) {
-                Value storedValue{};
-                historyList_->get(key, storedValue);
+                Value storedValue = it->second;
 
                 // 从访问历史队列移除
                 historyList_->remove(key);

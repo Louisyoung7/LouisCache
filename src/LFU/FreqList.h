@@ -24,6 +24,9 @@ class FreqList {
     NodePtr dummyHead_;
     NodePtr dummyTail_;
 
+    template<typename K, typename V>
+    friend class LfuAgingCache;
+
    public:
     explicit FreqList(int n)
         : freq_(n), dummyHead_(std::make_shared<LfuNode>()), dummyTail_(std::make_shared<LfuNode>()) {

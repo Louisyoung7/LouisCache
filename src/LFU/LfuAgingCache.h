@@ -125,14 +125,10 @@ class LfuAgingCache : public Policy<Key, Value> {
 
         if (it == freqToFreqListMap_.end()) {
             // 如果没有相应链表则创建
-            auto list = std::make_unique<FreqList<Key, Value>>(freq);
-
-            list->addNode(node);
-
-            freqToFreqListMap_.insert({freq, list});
-        } else {
-            freqToFreqListMap_[freq]->addNode(node);
+            freqToFreqListMap_.insert({freq,std::make_unique<FreqList<Key, Value>>(freq)});
         }
+
+        freqToFreqListMap_[freq]->addNode(node);
     }
 
     void removeFromList(NodePtr node) {

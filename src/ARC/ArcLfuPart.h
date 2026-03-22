@@ -199,7 +199,7 @@ class ArcLfuPart {
 
     // 从幽灵缓存链表移除节点
     void removeFromGhost(NodePtr node) {
-        if (node->prev_.expired() || node->next == nullptr) {
+        if (node->prev_.expired() || node->next_ == nullptr) {
             return;
         }
 
