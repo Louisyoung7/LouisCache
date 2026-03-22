@@ -7,11 +7,11 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_subdirectory(src)
 
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+
 # 添加测试构建选项，默认关闭
-option(BUILD_TESTS "Build tests" OFF)
+option(BUILD_TEST "Build benchmark" OFF)
 
-enable_testing()
-
-if(BUILD_TESTS) 
+if(BUILD_TEST) 
   add_subdirectory(tests)
 endif()
