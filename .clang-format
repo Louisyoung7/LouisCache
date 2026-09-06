@@ -1,28 +1,22 @@
 # .clang-format
-BasedOnStyle: Google  # 以 Google 风格为基础（
+BasedOnStyle: Google # 以 Google 风格为基础
 IndentWidth: 4
 UseTab: Never
 
 # 大括号在行尾不换行（即 Allman → K&R / Stroustrup 风格）
-BreakBeforeBraces: Attach  # 函数、类、控制结构的大括号不换行，紧跟在语句后
-
-# 不允许单独函数体
-AllowShortFunctionsOnASingleLine: false
+BreakBeforeBraces: Attach # 函数、类、控制结构的大括号不换行，紧跟在语句后
 
 # 启用命名空间结束注释
-FixNamespaceComments: true  # 自动在命名空间结束处添加 // namespace xxx 注释
+FixNamespaceComments: true # 自动在命名空间结束处添加 // namespace xxx 注释
 
-# 设置代码的列限制，即一行代码建议不超过 120 个字符，超过后会触发自动换行等格式化行为
-ColumnLimit: 120
+# 设置代码的列限制，即一行代码建议不超过 100 个字符，超过后会触发自动换行等格式化行为
+ColumnLimit: 100
 
 # 左括号（如函数、类的左括号）之后的代码（如参数、成员）会对齐排列
-AlignAfterOpenBracket: Align
-
-# 不允许短代码块（如只有一行的 if、for 等代码块）写在同一行
-AllowShortBlocksOnASingleLine: false
-
-# 完全不允许短 if 语句（如只有一行执行代码的 if）写在同一行
-AllowShortIfStatementsOnASingleLine: Never
+AlignAfterOpenBracket: BlockIndent
 
 # 按照一定规则（如字母序）对 #include 进行排序，
 SortIncludes: true
+
+# 总是将模板声明拆分成多行
+AlwaysBreakTemplateDeclarations: true
