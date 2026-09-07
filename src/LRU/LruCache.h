@@ -4,26 +4,30 @@
 #include <mutex>
 #include <unordered_map>
 
-#include "LRU/LruNode.h"
 #include "Policy.h"
 
 namespace louis::cache {
 template <typename Key, typename Value>
 class LruCache : public Policy<Key, Value> {
-    using NodeType = LruNode<Key, Value>;
-    using NodePtr = std::shared_ptr<NodeType>;
+    struct Node {
+        Key key;
+        Value value;
+        std::weak_ptr<Node> prev_;
+        std::shared_ptr<Node> next_;
+        Node(Key k, Value v) : key(std::move(k)), value(std::move(v)) {}
+    };
+
+    using NodePtr = std::shared_ptr<Node>;
     using NodeMap = std::unordered_map<Key, NodePtr>;
 
-    int capacity_;     // 缓存容量
-    NodeMap nodeMap_;  // 存储所有节点的映射，方便快速查找节点
-    std::mutex mutex_;
+    int capacity_;              // 缓存容量
+    NodeMap nodeMap_;           // 存储所有节点的映射，方便快速查找节点
+    mutable std::mutex mutex_;  // size() 为 const，需 mutable 才能加锁
     NodePtr dummyHead_;
     NodePtr dummyTail_;
 
    public:
-    LruCache(int capacity) : capacity_(capacity) {
-        initializeList();
-    }
+    LruCache(int capacity) : capacity_(capacity) { initializeList(); }
 
     // 如果缓存项存在，更新并移动到最新位置
     void put(Key key, Value value) override {
@@ -41,7 +45,7 @@ class LruCache : public Policy<Key, Value> {
         auto it = nodeMap_.find(key);
         if (it != nodeMap_.end()) {
             moveToMostRecent(it->second);
-            value = it->second->getValue();
+            value = it->second->value;
             return true;
         }
         return false;
@@ -53,7 +57,7 @@ class LruCache : public Policy<Key, Value> {
         return value;
     }
 
-    void remove(const Key& key) {
+    void remove(const Key& key) override {
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = nodeMap_.find(key);
         if (it != nodeMap_.end()) {
@@ -61,18 +65,25 @@ class LruCache : public Policy<Key, Value> {
             nodeMap_.erase(it);
         }
     }
+
+    // 获取缓存项数量
+    size_t size() const override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return nodeMap_.size();
+    }
+
    private:
     // 初始化虚拟首尾节点
     void initializeList() {
-        dummyHead_ = std::make_shared<LruNode<Key, Value>>(Key(), Value());
-        dummyTail_ = std::make_shared<LruNode<Key, Value>>(Key(), Value());
+        dummyHead_ = std::make_shared<Node>(Key(), Value());
+        dummyTail_ = std::make_shared<Node>(Key(), Value());
         dummyHead_->next_ = dummyTail_;
         dummyTail_->prev_ = dummyHead_;
     }
 
     // 更新后的节点会被移动到最新的位置
     void updateExistingNode(NodePtr node, const Value& value) {
-        node->setValue(value);
+        node->value = value;
         moveToMostRecent(node);
     }
 
@@ -83,7 +94,7 @@ class LruCache : public Policy<Key, Value> {
             evictLeastRecent();
         }
 
-        auto node = std::make_shared<LruNode<Key, Value>>(key, value);
+        auto node = std::make_shared<Node>(key, value);
         insertNode(node);
         nodeMap_[key] = node;
     }
@@ -128,10 +139,10 @@ class LruCache : public Policy<Key, Value> {
         if (leastRecent == dummyHead_) {
             return;
         }
-        
+
         removeNode(leastRecent);
         // 从map中移除
-        nodeMap_.erase(leastRecent->getKey());
+        nodeMap_.erase(leastRecent->key);
     }
 };
 }  // namespace louis::cache
