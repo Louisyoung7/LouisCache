@@ -2,7 +2,9 @@
 
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <unordered_map>
+#include <utility>
 
 #include "Policy.h"
 
@@ -34,12 +36,18 @@ class LruCache : public Policy<Key, Value> {
     // 如果缓存项不存在，添加新节点
     // 如果缓存已满，驱逐最近最少访问的节点
     void put(Key key, Value value) override {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto it = nodeMap_.find(key);
-        if (it != nodeMap_.end()) {
-            updateExistingNode(it->second, value);
-        } else {
-            addNewNode(key, value);
+        std::optional<std::pair<Key, Value>> evicted;  // 锁内收集，锁外分发
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto it = nodeMap_.find(key);
+            if (it != nodeMap_.end()) {
+                updateExistingNode(it->second, value);
+            } else {
+                evicted = addNewNode(key, value);
+            }
+        }
+        if (evicted) {
+            this->notifyLeave(evicted->first, evicted->second, LeaveReason::Evicted);
         }
     }
 
@@ -68,7 +76,7 @@ class LruCache : public Policy<Key, Value> {
             std::lock_guard<std::mutex> lock(mutex_);
             auto it = nodeMap_.find(key);
             if (it == nodeMap_.end()) return;
-            
+
             value = std::move(it->second->value);
             removeNode(it->second);
             nodeMap_.erase(it);
@@ -100,12 +108,15 @@ class LruCache : public Policy<Key, Value> {
 
     // 添加新节点
     // LRU淘汰策略体现：如果缓存已满，驱逐最近最少访问的节点
-    void addNewNode(const Key& key, const Value& value) {
-        if (nodeMap_.size() >= capacity_) evictLeastRecent();
+    // 调用方需持有锁；返回被驱逐的条目（未驱逐则返回空）
+    std::optional<std::pair<Key, Value>> addNewNode(const Key& key, const Value& value) {
+        std::optional<std::pair<Key, Value>> evicted;
+        if (nodeMap_.size() >= capacity_) evicted = evictLeastRecent();
 
         auto node = std::make_shared<Node>(key, value);
         insertNode(node);
         nodeMap_[key] = node;
+        return evicted;
     }
 
     // 先移除再添加
@@ -142,17 +153,18 @@ class LruCache : public Policy<Key, Value> {
     }
 
     // 驱逐最近最少访问的节点
-    void evictLeastRecent() {
+    // 调用方需持有锁；只做数据结构变更，不触发回调，由上层在锁外分发
+    std::optional<std::pair<Key, Value>> evictLeastRecent() {
         auto leastRecent = dummyTail_->prev_.lock();
         // 排除虚拟头节点
-        if (leastRecent == dummyHead_) return;
+        if (leastRecent == dummyHead_) return std::nullopt;
 
         auto key = leastRecent->key;
-        auto value = leastRecent->value;
-        this->notifyLeave(key, value, LeaveReason::Evicted);
+        auto value = std::move(leastRecent->value);
 
         removeNode(leastRecent);
         nodeMap_.erase(key);
+        return std::make_pair(std::move(key), std::move(value));
     }
 };
 }  // namespace louis::cache
