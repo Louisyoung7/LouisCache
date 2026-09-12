@@ -29,7 +29,10 @@ class LruCache : public Policy<Key, Value> {
    public:
     LruCache(int capacity) : capacity_(capacity) { initializeList(); }
 
+    // 插入或更新缓存项
     // 如果缓存项存在，更新并移动到最新位置
+    // 如果缓存项不存在，添加新节点
+    // 如果缓存已满，驱逐最近最少访问的节点
     void put(Key key, Value value) override {
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = nodeMap_.find(key);
@@ -40,6 +43,7 @@ class LruCache : public Policy<Key, Value> {
         }
     }
 
+    // 尝试获取缓存项，如果存在则移动到最新位置
     bool get(const Key& key, Value& value) override {
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = nodeMap_.find(key);
@@ -57,13 +61,20 @@ class LruCache : public Policy<Key, Value> {
         return value;
     }
 
+    // 显式移除缓存项
     void remove(const Key& key) override {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto it = nodeMap_.find(key);
-        if (it != nodeMap_.end()) {
+        Value value{};
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto it = nodeMap_.find(key);
+            if (it == nodeMap_.end()) return;
+            
+            value = std::move(it->second->value);
             removeNode(it->second);
             nodeMap_.erase(it);
         }
+        // notifyLeave 位于依赖基类 Policy<Key, Value> 中，需 this-> 才能在实例化时找到
+        this->notifyLeave(key, value, LeaveReason::Explicit);
     }
 
     // 获取缓存项数量
@@ -88,11 +99,9 @@ class LruCache : public Policy<Key, Value> {
     }
 
     // 添加新节点
-    // LRU淘汰策略再次体现：如果缓存已满，驱逐最近最少访问的节点
+    // LRU淘汰策略体现：如果缓存已满，驱逐最近最少访问的节点
     void addNewNode(const Key& key, const Value& value) {
-        if (nodeMap_.size() >= capacity_) {
-            evictLeastRecent();
-        }
+        if (nodeMap_.size() >= capacity_) evictLeastRecent();
 
         auto node = std::make_shared<Node>(key, value);
         insertNode(node);
@@ -116,7 +125,7 @@ class LruCache : public Policy<Key, Value> {
         next->prev_ = node;
     }
 
-    // 逻辑移除
+    // 从链表中移除节点
     void removeNode(NodePtr node) {
         if (node->prev_.expired() || node->next_ == nullptr) {
             return;
@@ -132,17 +141,18 @@ class LruCache : public Policy<Key, Value> {
         node->prev_.reset();
     }
 
-    // 从尾部移除，物理移除（包括映射）
+    // 驱逐最近最少访问的节点
     void evictLeastRecent() {
         auto leastRecent = dummyTail_->prev_.lock();
         // 排除虚拟头节点
-        if (leastRecent == dummyHead_) {
-            return;
-        }
+        if (leastRecent == dummyHead_) return;
+
+        auto key = leastRecent->key;
+        auto value = leastRecent->value;
+        this->notifyLeave(key, value, LeaveReason::Evicted);
 
         removeNode(leastRecent);
-        // 从map中移除
-        nodeMap_.erase(leastRecent->key);
+        nodeMap_.erase(key);
     }
 };
 }  // namespace louis::cache
