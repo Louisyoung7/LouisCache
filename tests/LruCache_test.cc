@@ -2,13 +2,18 @@
 
 #include <gtest/gtest.h>
 
+#include <mutex>
 #include <random>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
+
+#include "Policy.h"
 
 namespace {
 
+using louis::cache::LeaveReason;
 using louis::cache::LruCache;
 
 // 基本的 put / get 功能
@@ -258,6 +263,215 @@ TEST(LruCacheTest, ConcurrentPutAndGet) {
     }
 
     EXPECT_LE(cache.size(), static_cast<size_t>(kCapacity));
+}
+
+// ============ LeaveCallback 回调测试 ============
+
+// 记录一次回调的 key / value / reason
+struct LeaveRecord {
+    int key;
+    int value;
+    LeaveReason reason;
+};
+
+// 安装回调并返回记录列表（列表由回调写入，测试结束时回收）
+// 注意：回调在持锁状态下可能被并发触发，容器自带锁保护
+class LeaveRecorder {
+   public:
+    explicit LeaveRecorder(LruCache<int, int>& cache) {
+        cache.setLeaveCallback([this](const int& k, const int& v, LeaveReason r) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            records_.push_back({k, v, r});
+        });
+    }
+
+    std::vector<LeaveRecord> take() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return std::exchange(records_, {});
+    }
+
+   private:
+    std::mutex mutex_;
+    std::vector<LeaveRecord> records_;
+};
+
+// 容量淘汰触发回调，reason 为 Evicted，且携带正确的 key/value
+TEST(LruCacheLeaveCallbackTest, EvictionNotifiesWithEvictedReason) {
+    LruCache<int, int> cache(2);
+    LeaveRecorder recorder(cache);
+
+    cache.put(1, 10);
+    cache.put(2, 20);
+    cache.put(3, 30);  // 容量满，淘汰 1
+
+    auto records = recorder.take();
+    ASSERT_EQ(records.size(), 1u);
+    EXPECT_EQ(records[0].key, 1);
+    EXPECT_EQ(records[0].value, 10);
+    EXPECT_EQ(records[0].reason, LeaveReason::Evicted);
+}
+
+// 显式 remove 触发回调，reason 为 Explicit
+TEST(LruCacheLeaveCallbackTest, RemoveNotifiesWithExplicitReason) {
+    LruCache<int, int> cache(2);
+    LeaveRecorder recorder(cache);
+
+    cache.put(1, 10);
+    cache.remove(1);
+
+    auto records = recorder.take();
+    ASSERT_EQ(records.size(), 1u);
+    EXPECT_EQ(records[0].key, 1);
+    EXPECT_EQ(records[0].value, 10);
+    EXPECT_EQ(records[0].reason, LeaveReason::Explicit);
+}
+
+// remove 不存在的 key 不触发回调
+TEST(LruCacheLeaveCallbackTest, RemoveNonexistentKeyDoesNotNotify) {
+    LruCache<int, int> cache(2);
+    LeaveRecorder recorder(cache);
+
+    cache.remove(99);
+
+    EXPECT_TRUE(recorder.take().empty());
+}
+
+// 淘汰顺序遵循 LRU 语义：get 刷新过的条目不会被淘汰
+TEST(LruCacheLeaveCallbackTest, EvictionFollowsRecencyOrder) {
+    LruCache<int, int> cache(3);
+    LeaveRecorder recorder(cache);
+
+    cache.put(1, 10);
+    cache.put(2, 20);
+    cache.put(3, 30);
+
+    int value = 0;
+    cache.get(1, value);  // 1 被刷新，最旧变为 2
+
+    cache.put(4, 40);  // 淘汰 2
+
+    auto records = recorder.take();
+    ASSERT_EQ(records.size(), 1u);
+    EXPECT_EQ(records[0].key, 2);
+    EXPECT_EQ(records[0].value, 20);
+    EXPECT_EQ(records[0].reason, LeaveReason::Evicted);
+}
+
+// 更新已存在的 key 不触发回调（条目没有离开缓存）
+TEST(LruCacheLeaveCallbackTest, UpdatingExistingKeyDoesNotNotify) {
+    LruCache<int, int> cache(2);
+    LeaveRecorder recorder(cache);
+
+    cache.put(1, 10);
+    cache.put(1, 99);  // 原地更新
+
+    EXPECT_TRUE(recorder.take().empty());
+}
+
+// 普通读写（未淘汰）不触发回调
+TEST(LruCacheLeaveCallbackTest, NormalGetDoesNotNotify) {
+    LruCache<int, int> cache(2);
+    LeaveRecorder recorder(cache);
+
+    cache.put(1, 10);
+    int value = 0;
+    cache.get(1, value);
+
+    EXPECT_TRUE(recorder.take().empty());
+}
+
+// 连续插入形成淘汰序列，回调按淘汰顺序逐条触发
+TEST(LruCacheLeaveCallbackTest, SlidingWindowNotifiesInEvictionOrder) {
+    LruCache<int, int> cache(3);
+    LeaveRecorder recorder(cache);
+
+    for (int i = 0; i < 8; ++i) {
+        cache.put(i, i * 10);
+    }
+
+    auto records = recorder.take();
+    // 前 3 条占满容量，后续 5 次插入各淘汰 1 条
+    ASSERT_EQ(records.size(), 5u);
+    for (size_t i = 0; i < records.size(); ++i) {
+        EXPECT_EQ(records[i].key, static_cast<int>(i));
+        EXPECT_EQ(records[i].value, static_cast<int>(i) * 10);
+        EXPECT_EQ(records[i].reason, LeaveReason::Evicted);
+    }
+}
+
+// 混合 Explicit / Evicted 时 reason 区分正确
+TEST(LruCacheLeaveCallbackTest, MixedRemoveAndEvictionReportCorrectReasons) {
+    LruCache<int, int> cache(2);
+    LeaveRecorder recorder(cache);
+
+    cache.put(1, 10);
+    cache.put(2, 20);
+    cache.remove(1);   // Explicit
+    cache.put(3, 30);  // 容量未满（remove 腾出了位置），不淘汰
+    cache.put(4, 40);  // 容量满，淘汰 2，Evicted
+
+    auto records = recorder.take();
+    ASSERT_EQ(records.size(), 2u);
+    EXPECT_EQ(records[0].key, 1);
+    EXPECT_EQ(records[0].reason, LeaveReason::Explicit);
+    EXPECT_EQ(records[1].key, 2);
+    EXPECT_EQ(records[1].value, 20);
+    EXPECT_EQ(records[1].reason, LeaveReason::Evicted);
+}
+
+// remove 后重新插入再淘汰，两条回调都携带当时的值
+TEST(LruCacheLeaveCallbackTest, ReinsertedKeyNotifiesEachTime) {
+    LruCache<int, int> cache(1);
+    LeaveRecorder recorder(cache);
+
+    cache.put(1, 10);
+    cache.remove(1);
+    cache.put(1, 11);
+    cache.put(2, 20);  // 淘汰重新插入的 1
+
+    auto records = recorder.take();
+    ASSERT_EQ(records.size(), 2u);
+    EXPECT_EQ(records[0].value, 10);
+    EXPECT_EQ(records[0].reason, LeaveReason::Explicit);
+    EXPECT_EQ(records[1].value, 11);
+    EXPECT_EQ(records[1].reason, LeaveReason::Evicted);
+}
+
+// 字符串键值也能通过回调传出
+TEST(LruCacheLeaveCallbackTest, WorksWithStringKeyAndValue) {
+    LruCache<std::string, std::string> cache(1);
+
+    std::vector<std::pair<std::string, std::string>> records;
+    cache.setLeaveCallback([&](const std::string& k, const std::string& v, LeaveReason r) {
+        ASSERT_EQ(r, LeaveReason::Evicted);
+        records.emplace_back(k, v);
+    });
+
+    cache.put("a", "alpha");
+    cache.put("b", "beta");  // 淘汰 "a"
+
+    ASSERT_EQ(records.size(), 1u);
+    EXPECT_EQ(records[0].first, "a");
+    EXPECT_EQ(records[0].second, "alpha");
+}
+
+// remove 路径在锁外通知，回调内可安全访问缓存自身
+// （evict 路径目前在锁内通知，回调内不得调用缓存方法，见 remove() 的实现）
+TEST(LruCacheLeaveCallbackTest, RemoveCallbackCanCallCacheInsideCallback) {
+    LruCache<int, int> cache(2);
+
+    cache.put(1, 10);
+    cache.put(2, 20);
+
+    size_t sizeInsideCallback = 0;
+    cache.setLeaveCallback([&](const int& /*k*/, const int& /*v*/, LeaveReason /*r*/) {
+        // remove 先完成移除、释放锁，再通知；此时条目已不在缓存中
+        sizeInsideCallback = cache.size();
+    });
+
+    cache.remove(1);
+
+    EXPECT_EQ(sizeInsideCallback, 1u);
 }
 
 }  // namespace
