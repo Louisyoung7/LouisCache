@@ -456,7 +456,6 @@ TEST(LruCacheLeaveCallbackTest, WorksWithStringKeyAndValue) {
 }
 
 // remove 路径在锁外通知，回调内可安全访问缓存自身
-// （evict 路径目前在锁内通知，回调内不得调用缓存方法，见 remove() 的实现）
 TEST(LruCacheLeaveCallbackTest, RemoveCallbackCanCallCacheInsideCallback) {
     LruCache<int, int> cache(2);
 
@@ -472,6 +471,25 @@ TEST(LruCacheLeaveCallbackTest, RemoveCallbackCanCallCacheInsideCallback) {
     cache.remove(1);
 
     EXPECT_EQ(sizeInsideCallback, 1u);
+}
+
+// evict 路径同样在锁外、且在条目移除完成后通知，回调内可安全访问缓存自身
+TEST(LruCacheLeaveCallbackTest, EvictCallbackCanCallCacheInsideCallback) {
+    LruCache<int, int> cache(2);
+
+    cache.put(1, 10);
+    cache.put(2, 20);
+
+    size_t sizeInsideCallback = 0;
+    cache.setLeaveCallback([&](const int& /*k*/, const int& /*v*/, LeaveReason r) {
+        EXPECT_EQ(r, LeaveReason::Evicted);
+        // 淘汰与新插入完成后才通知，缓存应持有 2 条（新条目已入、旧条目已走）
+        sizeInsideCallback = cache.size();
+    });
+
+    cache.put(3, 30);  // 触发 evict 路径
+
+    EXPECT_EQ(sizeInsideCallback, 2u);
 }
 
 }  // namespace
