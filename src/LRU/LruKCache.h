@@ -1,87 +1,93 @@
 #pragma once
 
 #include <cstddef>
-#include <memory>
-#include <unordered_map>
 
 #include "LRU/LruCache.h"
+#include "Policy.h"
 
 namespace louis::cache {
 template <typename Key, typename Value>
-class LruKCache : public LruCache<Key, Value> {
-    std::unique_ptr<LruCache<Key, size_t>> historyList_;  // 访问历史队列，Value存储访问次数
-    std::unordered_map<Key, Value> valueMap_;             // 存储访问历史队列里的缓存项
-    int k_;  // 从访问历史队列移动到主缓存的阈值，一般设置为2
+class LruKCache : public Policy<Key, Value> {
    public:
-    LruKCache(int capacity, int historyCapacity, int k = 2)
-        : LruCache<Key, Value>(capacity),
-          historyList_(std::make_unique<LruCache<Key, size_t>>(historyCapacity)),
-          k_(k) {
-    }
+    LruKCache(size_t capacity, size_t historyCapacity, int k = 2)
+        : mainCache_(capacity), historyList_(historyCapacity), k_(k) {}
 
     // 添加缓存项
+    // 若在主缓存中：直接更新
+    // 若不在主缓存中：在历史队列中累计访问次数，达到 k次后晋升到主缓存
     void put(Key key, Value value) override {
-        Value existingValue{};
-        bool inMain = LruCache<Key, Value>::get(key, existingValue);
-
-        if (inMain) {
-            // 如果在主缓存中，更新主缓存
-            LruCache<Key, Value>::put(key, value);
+        if (mainCache_.contains(key).has_value()) {  // 在主缓存中，更新主缓存
+            mainCache_.put(key, std::move(value));
+            return;
+        }  // 不在主缓存中，更新访问历史
+        std::optional<HistoryEntry> inHistory = historyList_.contains(key);
+        HistoryEntry historyEntry{};
+        historyEntry.value = std::move(value);
+        historyEntry.accessCount =
+            inHistory ? inHistory->accessCount + 1
+                      : 1;  // 达到阈值，晋升到主缓存；否则留在历史队列中等待后续访问
+        if (historyEntry.accessCount >= k_) {
+            historyList_.remove(key);
+            mainCache_.put(std::move(key), std::move(historyEntry.value));
         } else {
-            // 不在主缓存中，添加到历史访问队列
-            size_t accessCount = 0;
-            // 如果在访问历史队列没有，get 返回的访问次数是0
-            historyList_->get(key, accessCount);
-            accessCount++;
-            historyList_->put(key, accessCount);
-
-            // 达到阈值，先从访问历史队列移除，再添加到主缓存中
-            if (accessCount >= k_) {
-                historyList_->remove(key);
-                valueMap_.erase(key);
-                LruCache<Key, Value>::put(key, value);
-            }
+            historyList_.put(std::move(key), std::move(historyEntry));
         }
     }
 
-    // 查询缓存项
+    // 获取缓存项
+    // 若在主缓存中：直接返回
+    // 若不在主缓存中：从访问历史队列中获取，更新访问次数，判断是否晋升到主缓存
+    bool get(const Key& key, Value& value) override {
+        // 优先从主缓存获取
+        bool inMain = mainCache_.get(key, value);
+        if (inMain) return true;
+
+        // 从访问历史队列获取
+        std::optional<HistoryEntry> inHistory = historyList_.contains(key);
+        if (inHistory) {
+            HistoryEntry& historyEntry = inHistory.value();
+            // 更新访问次数
+            // 如果访问次数达到阈值，晋升到主缓存
+            historyEntry.accessCount++;
+            if (historyEntry.accessCount >= k_) {
+                historyList_.remove(key);
+                mainCache_.put(std::move(key), std::move(historyEntry.value));
+            }
+        }
+        // 只要不是在主缓存中，均视为未命中，返回 false
+        return false;
+    }
+
+    // 获取缓存项
+    // 若在主缓存中：直接返回
+    // 若不在主缓存中：从访问历史队列中获取，更新访问次数，判断是否晋升到主缓存
     Value get(const Key& key) override {
         Value value{};
-
-        // 优先从主缓存获取
-        bool inMain = LruCache<Key, Value>::get(key, value);
-        if (inMain) {
-            return value;
-        }
-
-        size_t accessCount = 0;
-        bool inHistory = historyList_->get(key, accessCount);
-        if (!inHistory) {
-            // 在访问历史队列里也没有，返回空值
-            return value;
-        }
-
-        // 在访问历史队列中，更新访问次数
-        accessCount++;
-        historyList_->put(key, accessCount);
-
-        // 达到阈值，移动到主缓存
-        if (accessCount >= k_) {
-            auto it = valueMap_.find(key);
-            if (it != valueMap_.end()) {
-                Value storedValue = it->second;
-
-                // 从访问历史队列移除
-                historyList_->remove(key);
-                valueMap_.erase(it);
-
-                // 添加到主缓存
-                LruCache<Key, Value>::put(key, storedValue);
-            }
-        }
-
-        // 就算在访问历史队列中，也视为缓存未命中，返回空值
+        get(key, value);
         return value;
     }
+
+    // 显式移除缓存项
+    // 若在主缓存中：直接移除
+    // 若不在主缓存中：从访问历史队列中移除
+    void remove(const Key& key) override {
+        mainCache_.remove(key);
+        historyList_.remove(key);
+    }
+
+    // 获取缓存项数量
+    size_t size() const override { return mainCache_.size(); }
+
+   private:
+    struct HistoryEntry {
+        Value value;
+        int accessCount{};
+    };
+
+    LruCache<Key, Value> mainCache_;           // 主缓存
+    LruCache<Key, HistoryEntry> historyList_;  // 访问历史队列
+    size_t capacity_;                          // 主缓存容量
+    size_t historyCapacity_;                   // 访问历史队列容量
+    int k_;  // 从访问历史队列移动到主缓存的阈值，一般设置为2
 };
 }  // namespace louis::cache
