@@ -87,9 +87,11 @@ class LruCache : public Policy<Key, Value> {
 
     // 查询缓存项是否存在
     // 不触发淘汰策略
-    std::optional<Value> contains(const Key& key) override {
+    std::optional<Value> contains(const Key& key) {
         std::lock_guard<std::mutex> lock(mutex_);
-        return nodeMap_.find(key) != nodeMap_.end() ? nodeMap_[key]->value : std::nullopt;
+        auto it = nodeMap_.find(key);
+        if (it == nodeMap_.end()) return std::nullopt;
+        return it->second->value;
     }
 
    private:
