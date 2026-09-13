@@ -22,12 +22,6 @@ class LruCache : public Policy<Key, Value> {
     using NodePtr = std::shared_ptr<Node>;
     using NodeMap = std::unordered_map<Key, NodePtr>;
 
-    int capacity_;              // 缓存容量
-    NodeMap nodeMap_;           // 存储所有节点的映射，方便快速查找节点
-    mutable std::mutex mutex_;  // size() 为 const，需 mutable 才能加锁
-    NodePtr dummyHead_;
-    NodePtr dummyTail_;
-
    public:
     LruCache(int capacity) : capacity_(capacity) { initializeList(); }
 
@@ -89,6 +83,13 @@ class LruCache : public Policy<Key, Value> {
     size_t size() const override {
         std::lock_guard<std::mutex> lock(mutex_);
         return nodeMap_.size();
+    }
+
+    // 查询缓存项是否存在
+    // 不触发淘汰策略
+    std::optional<Value> contains(const Key& key) override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return nodeMap_.find(key) != nodeMap_.end() ? nodeMap_[key]->value : std::nullopt;
     }
 
    private:
@@ -166,5 +167,11 @@ class LruCache : public Policy<Key, Value> {
         nodeMap_.erase(key);
         return std::make_pair(std::move(key), std::move(value));
     }
+
+    int capacity_;              // 缓存容量
+    NodeMap nodeMap_;           // 存储所有节点的映射，方便快速查找节点
+    mutable std::mutex mutex_;  // size() 为 const，需 mutable 才能加锁
+    NodePtr dummyHead_;
+    NodePtr dummyTail_;
 };
 }  // namespace louis::cache
