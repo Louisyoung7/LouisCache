@@ -22,17 +22,12 @@ class LruKCache : public Policy<Key, Value> {
         if (mainCache_.contains(key).has_value()) {  // 在主缓存中，更新主缓存
             mainCache_.put(key, std::move(value));
             return;
-        }  // 不在主缓存中，更新访问历史
-        std::optional<HistoryEntry> inHistory = historyList_.contains(key);
-        HistoryEntry& historyEntry = inHistory.value();
-        // 更新访问次数
-        // 如果访问次数达到阈值，晋升到主缓存
-        historyEntry.accessCount++;
-        if (historyEntry.accessCount >= k_) {
-            historyList_.remove(key);
-            mainCache_.put(std::move(key), std::move(historyEntry.value));
-        } else {
-            historyList_.put(std::move(key), std::move(historyEntry));
+        }
+        // 不在主缓存中：新值必须写进条目，否则历史里的旧值会覆盖本次 put
+        HistoryEntry entry = historyList_.contains(key).value_or(HistoryEntry{});
+        entry.value = std::move(value);
+        if (auto promoted = recordAccess(key, std::move(entry))) {
+            mainCache_.put(key, std::move(*promoted));
         }
     }
 
@@ -41,26 +36,14 @@ class LruKCache : public Policy<Key, Value> {
     // 若不在主缓存中：从访问历史队列中获取，更新访问次数，判断是否晋升到主缓存
     bool get(const Key& key, Value& value) override {
         std::lock_guard<std::mutex> lock(mutex_);
-        // 优先从主缓存获取
-        bool inMain = mainCache_.get(key, value);
-        if (inMain) return true;
+        if (mainCache_.get(key, value)) return true;
 
-        // 从访问历史队列获取
-        std::optional<HistoryEntry> inHistory = historyList_.contains(key);
-        if (inHistory) {
-            HistoryEntry& historyEntry = inHistory.value();
-            // 更新访问次数
-            // 如果访问次数达到阈值，晋升到主缓存
-            historyEntry.accessCount++;
-            if (historyEntry.accessCount >= k_) {
-                historyList_.remove(key);
-                mainCache_.put(std::move(key), std::move(historyEntry.value));
-            } else {
-                historyList_.put(std::move(key), std::move(historyEntry));
-            }
+        auto inHistory = historyList_.contains(key);
+        if (!inHistory) return false;
+        if (auto promoted = recordAccess(key, std::move(*inHistory))) {
+            mainCache_.put(key, std::move(*promoted));
         }
-        // 只要不是在主缓存中，均视为未命中，返回 false
-        return false;
+        return false;  // 只要不是在主缓存中，均视为未命中
     }
 
     // 获取缓存项
@@ -92,6 +75,16 @@ class LruKCache : public Policy<Key, Value> {
         Value value;
         int accessCount{};
     };
+
+    // 记录一次访问：未达阈值则写回历史队列并返回空；达到阈值则从历史队列移除并返回待晋升的值
+    std::optional<Value> recordAccess(const Key& key, HistoryEntry entry) {
+        if (++entry.accessCount >= k_) {
+            historyList_.remove(key);
+            return std::move(entry.value);
+        }
+        historyList_.put(key, std::move(entry));
+        return std::nullopt;
+    }
 
     LruCache<Key, Value> mainCache_;           // 主缓存
     LruCache<Key, HistoryEntry> historyList_;  // 访问历史队列
