@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cmath>
 #include <cstddef>
 #include <functional>
 #include <memory>
@@ -16,8 +15,11 @@ class ShardedLruCache : public Policy<Key, Value> {
    public:
     ShardedLruCache(size_t capacity, int sliceNum = std::thread::hardware_concurrency())
         : sliceNum_(sliceNum <= 0 ? 1 : sliceNum) {
-        size_t sliceSize = std::ceil(capacity / static_cast<double>(sliceNum_));
-        for (int i = 0; i < sliceNum_; ++i) {
+        // 精确分摊：前 remainder 个分片各多分 1 个，各分片容量之和恰为 capacity
+        size_t base = capacity / sliceNum_;
+        size_t remainder = capacity % sliceNum_;
+        for (size_t i = 0; i < static_cast<size_t>(sliceNum_); ++i) {
+            size_t sliceSize = base + (i < remainder ? 1 : 0);
             lruSliceCaches_.emplace_back(std::make_unique<LruCache<Key, Value>>(sliceSize));
             lruSliceCaches_.back()->setLeaveCallback(
                 [this](const Key& k, const Value& v, LeaveReason r) {
