@@ -129,6 +129,44 @@ TEST(ShardedLruCacheTest, TotalCapacityInvariant) {
     EXPECT_EQ(cache.size(), 100u);
 }
 
+// 分片数超过容量时被钳制为 capacity：capacity=10、请求 20 片 → 10 片各容量 1
+TEST(ShardedLruCacheTest, SliceNumClampedToCapacity) {
+    ShardedLruCache<int, int, IdentityHash> cache(10, 20);
+    for (int key = 0; key < 30; ++key) {
+        cache.put(key, key * 10);
+    }
+
+    // 每片容量 1，最后写入的 key 20-29（key%10 与 0-9 同片）幸存
+    EXPECT_EQ(cache.size(), 10u);
+    for (int key = 0; key < 20; ++key) {
+        EXPECT_EQ(cache.get(key), 0) << "key=" << key;
+    }
+    for (int key = 20; key < 30; ++key) {
+        EXPECT_EQ(cache.get(key), key * 10) << "key=" << key;
+    }
+}
+
+// 容量 0：单片容量 0，什么都存不下
+TEST(ShardedLruCacheTest, ZeroCapacityStoresNothing) {
+    ShardedLruCache<int, int, IdentityHash> cache(0, 4);
+    cache.put(1, 10);
+    cache.put(2, 20);
+
+    EXPECT_EQ(cache.size(), 0u);
+    EXPECT_EQ(cache.get(1), 0);
+}
+
+// 非法分片数（0）归 1：退化为普通 LRU，功能完整
+TEST(ShardedLruCacheTest, NonPositiveSliceNumFallsBackToSingleSlice) {
+    ShardedLruCache<int, int, IdentityHash> cache(8, 0);
+    for (int key = 0; key < 8; ++key) {
+        cache.put(key, key * 10);
+    }
+
+    EXPECT_EQ(cache.size(), 8u);
+    EXPECT_EQ(cache.get(7), 70);
+}
+
 // ============ LeaveCallback ============
 
 struct LeaveRecord {

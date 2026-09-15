@@ -159,6 +159,19 @@ TEST(LruCacheTest, HoldsExactlyCapacityItems) {
     EXPECT_EQ(cache.size(), 5u);
 }
 
+// 容量 0：put 直接丢弃，size 恒为 0，get 恒未命中
+TEST(LruCacheTest, ZeroCapacityDropsAllPuts) {
+    LruCache<int, int> cache(0);
+    cache.put(1, 10);
+    cache.put(2, 20);
+
+    EXPECT_EQ(cache.size(), 0u);
+    int value = -1;
+    EXPECT_FALSE(cache.get(1, value));
+    EXPECT_EQ(value, -1);
+    EXPECT_EQ(cache.get(2), 0);
+}
+
 // remove 删除指定条目
 TEST(LruCacheTest, RemoveErasesEntry) {
     LruCache<int, int> cache(3);
@@ -490,6 +503,17 @@ TEST(LruCacheLeaveCallbackTest, EvictCallbackCanCallCacheInsideCallback) {
     cache.put(3, 30);  // 触发 evict 路径
 
     EXPECT_EQ(sizeInsideCallback, 2u);
+}
+
+// 容量 0：put 丢弃的条目未曾驻留，不触发回调
+TEST(LruCacheLeaveCallbackTest, ZeroCapacityPutDoesNotNotify) {
+    LruCache<int, int> cache(0);
+    LeaveRecorder recorder(cache);
+
+    cache.put(1, 10);
+    cache.put(1, 11);
+
+    EXPECT_TRUE(recorder.take().empty());
 }
 
 }  // namespace

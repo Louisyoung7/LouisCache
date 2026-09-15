@@ -15,6 +15,11 @@ class ShardedLruCache : public Policy<Key, Value> {
    public:
     ShardedLruCache(size_t capacity, int sliceNum = std::thread::hardware_concurrency())
         : sliceNum_(sliceNum <= 0 ? 1 : sliceNum) {
+        // 分片数钳制：非正值归 1；不超过 capacity，避免容量 0 的死分片
+        size_t num = sliceNum > 0 ? static_cast<size_t>(sliceNum) : 1;
+        if (num > capacity) num = capacity > 0 ? capacity : 1;  // 分片数即 capacity
+        sliceNum_ = static_cast<int>(num);
+        
         // 精确分摊：前 remainder 个分片各多分 1 个，各分片容量之和恰为 capacity
         size_t base = capacity / sliceNum_;
         size_t remainder = capacity % sliceNum_;

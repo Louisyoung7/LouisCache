@@ -223,6 +223,17 @@ TEST(LruKCacheTest, HistoryCapacityEvictsOldestHistoryEntry) {
     EXPECT_EQ(cache.get(1), 12);
 }
 
+// 历史容量 0：访问历史无处存放，k>=2 时永远无法晋升
+TEST(LruKCacheTest, HistoryCapacityZeroNeverPromotes) {
+    LruKCache<int, int> cache(2, 0);
+    cache.put(1, 10);
+    cache.put(1, 11);
+    cache.put(1, 12);
+
+    EXPECT_EQ(cache.size(), 0u);
+    EXPECT_EQ(cache.get(1), 0);
+}
+
 // ============ 并发 ============
 
 // 多线程并发 put/get/remove：外层锁保证复合操作原子，命中值一致且容量不被突破

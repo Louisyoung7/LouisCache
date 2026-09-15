@@ -30,6 +30,7 @@ class LruCache : public Policy<Key, Value> {
     // 如果缓存项不存在，添加新节点
     // 如果缓存已满，驱逐最近最少访问的节点
     void put(Key key, Value value) override {
+        if (capacity_ <= 0) return;  // 容量 0：无处可存，直接丢弃（条目未曾驻留，不通知）
         std::optional<std::pair<Key, Value>> evicted;  // 锁内收集，锁外分发
         {
             std::lock_guard<std::mutex> lock(mutex_);
