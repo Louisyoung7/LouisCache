@@ -28,6 +28,13 @@ class ShardedLruCache : public Policy<Key, Value> {
         }
     }
 
+    // 禁止拷贝和移动
+    // 分片回调捕获本对象 this，移动会使闭包内指针悬垂，故禁止拷贝/移动
+    ShardedLruCache(const ShardedLruCache&) = delete;
+    ShardedLruCache& operator=(const ShardedLruCache&) = delete;
+    ShardedLruCache(ShardedLruCache&&) = delete;
+    ShardedLruCache& operator=(ShardedLruCache&&) = delete;
+
     void put(Key key, Value value) override {
         size_t sliceIndex = hash(key);
         lruSliceCaches_[sliceIndex]->put(key, value);
