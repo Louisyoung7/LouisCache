@@ -47,7 +47,7 @@ class ShardedLruCache : public Policy<Key, Value> {
         return lruSliceCaches_[sliceIndex]->get(key, value);
     }
 
-    Value get(const Key& key) {
+    Value get(const Key& key) override {
         Value value{};
         get(key, value);
         return value;
