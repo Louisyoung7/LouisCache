@@ -8,6 +8,7 @@ LouisCache 是一个高性能的 C++ 缓存库，实现了多种缓存替换策�
   - LRU (Least Recently Used) - 最近最少使用
   - LFU (Least Frequently Used) - 最不经常使用
   - ARC (Adaptive Replacement Cache) - 自适应替换缓存
+- **缓存项离开通知**（LeaveCallback）：缓存项因淘汰、显式移除或过期离开时回调通知使用方，可同步清理外部资源
 - **线程安全**：支持多线程环境
 - **高性能**：优化的实现，减少锁竞争
 - **模板化设计**：支持任意类型的键值对
@@ -16,30 +17,30 @@ LouisCache 是一个高性能的 C++ 缓存库，实现了多种缓存替换策�
 
 ## 支持的缓存实现
 
-### LRU 系列
+### LRU 系列（已适配统一接口）
 - `LruCache` - 基础 LRU 缓存
-- `LruKCache` - K 最近最少使用缓存
+- `LruKCache` - K 最近最少使用缓存（访问 k 次后晋升进主缓存）
 - `ShardedLruCache` - 分片 LRU 缓存（提高并发性能）
 
-### LFU 系列
+### LFU 系列（适配中，暂未实现统一接口的 remove/size）
 - `LfuAgingCache` - 带老化机制的 LFU 缓存
 - `ShardedLfuCache` - 分片 LFU 缓存
 
-### ARC 系列
+### ARC 系列（适配中，暂未实现统一接口的 remove/size）
 - `ArcCache` - 自适应替换缓存（结合 LRU 和 LFU 的优点）
 
 ## 项目结构
 
 ```
 LouisCache/
+├── docs/               # 设计文档
 ├── src/                # 头文件目录
 │   ├── ARC/            # ARC 缓存实现
 │   ├── LFU/            # LFU 缓存实现
 │   ├── LRU/            # LRU 缓存实现
 │   └── Policy.h        # 缓存策略抽象接口
-├── tests/              # 测试目录
-│   ├── benchmark.cc    # 性能基准测试（唯一的源文件）
-│   └── hitTest.png     # 命中率测试结果
+├── tests/              # 单元测试（Google Test）
+├── conanfile.py        # Conan 依赖配置
 ├── CMakeLists.txt      # CMake 构建文件
 └── README.md           # 项目说明
 ```
@@ -64,24 +65,22 @@ louis::cache::LruCache<int, std::string> cache(100);
 
 ### 构建测试
 
-如果您想运行性能测试，可以按照以下步骤构建：
+单元测试基于 Google Test（由 Conan 提供依赖）：
 
 ```bash
 # 克隆仓库
 git clone https://github.com/Louisyoung7/LouisCache.git
 cd LouisCache
 
-# 创建构建目录
-mkdir build && cd build
+# 安装依赖（首次）
+conan install . --output-folder=build --build=missing
 
-# 配置 CMake
-cmake -DBUILD_TEST=ON ..
-
-# 构建测试
-make
+# 配置并构建
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TEST=ON
+cmake --build build
 
 # 运行测试
-cd bin && ./benchmark
+ctest --test-dir build
 ```
 
 ## 使用示例
@@ -116,6 +115,14 @@ int main() {
 ### 使用其他缓存策略
 
 ```cpp
+// 使用 LRU-K 缓存（主缓存容量 100，历史队列容量 500）
+#include "LRU/LruKCache.h"
+louis::cache::LruKCache<int, std::string> lrukCache(100, 500);
+
+// 使用分片 LRU 缓存（提高并发性能）
+#include "LRU/ShardedLruCache.h"
+louis::cache::ShardedLruCache<int, std::string> shardedCache(100);
+
 // 使用 LFU 缓存
 #include "LFU/LfuAgingCache.h"
 louis::cache::LfuAgingCache<int, std::string> lfuCache(100);
@@ -125,16 +132,44 @@ louis::cache::LfuAgingCache<int, std::string> lfuCache(100);
 louis::cache::ArcCache<int, std::string> arcCache(100);
 ```
 
-## 性能测试
+> 注意：LFU 与 ARC 系列正在适配统一接口（`remove`/`size`），当前尚为抽象类，无法直接实例化。
 
-项目包含一个性能基准测试程序（`tests/benchmark.cc`），用于比较不同缓存策略的性能和命中率。这是项目中唯一的源文件。
+### 缓存项离开通知（LeaveCallback）
 
-### 运行测试
+缓存项离开缓存时（容量淘汰 `Evicted`、显式移除 `Explicit`、过期 `Expired`），通过回调携带 key、value 和原因通知使用方，适用于同步清理外部资源（如向量索引、文件句柄）的场景：
 
-```bash
-cd build/bin
-./benchmark
+```cpp
+louis::cache::LruCache<int, std::string> cache(2);
+
+cache.setLeaveCallback([](const int& key, const std::string& value,
+                          louis::cache::LeaveReason reason) {
+    switch (reason) {
+        case louis::cache::LeaveReason::Evicted:
+            // 容量淘汰：清理与该条目关联的外部资源
+            break;
+        case louis::cache::LeaveReason::Explicit:
+            // remove() 显式移除
+            break;
+        case louis::cache::LeaveReason::Expired:
+            // 过期失效
+            break;
+    }
+});
+
+cache.put(1, "value1");
+cache.put(2, "value2");
+cache.put(3, "value3");  // 1 被淘汰，触发回调
 ```
+
+回调的重要约定：
+
+- **锁外分发**：回调在缓存内部锁全部释放后触发，回调内可安全重入缓存任意方法（如再调 `get`/`put`/`size`），不会死锁，且能观察到离开后的最终状态
+- **变更完成后触发**：回调触发时条目已从缓存移除，`size()` 等查询反映最终状态
+- **内部变动不通知**：复合结构（如 `LruKCache`）中，条目在主缓存与历史队列间的晋升、历史队列自身的淘汰对外不可见，不触发回调；只有条目真正"离开缓存"时才通知
+
+## 测试
+
+单元测试基于 Google Test，覆盖各策略的基础行为、淘汰语义、LeaveCallback 触发与静默场景、回调重入安全及多线程并发，当前 82 个用例全部通过（见上文构建步骤）。
 
 ## 缓存策略选择指南
 
@@ -144,8 +179,10 @@ cd build/bin
 
 ## 线程安全性
 
-- 分片缓存实现（`ShardedLruCache` 和 `ShardedLfuCache`）提供更好的并发性能
-- 基础缓存实现也支持多线程访问
+- 各实现内部以锁保证多线程访问安全；复合实现（如 `LruKCache`）以单锁串行化公共方法，保证复合操作原子
+- 分片实现（`ShardedLruCache`、`ShardedLfuCache`）以独立锁降低锁竞争，提高并发吞吐；分片容量精确分摊，各分片容量之和恰为总容量
+- `ShardedLruCache` 的 `size()` 为各分片分别加锁后求和，多线程下不是原子快照（分片结构的固有属性）
+- 回调分发不持有缓存内部锁，回调内重入缓存安全（见 LeaveCallback 约定）
 
 ## 许可证
 
