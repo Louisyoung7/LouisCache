@@ -92,9 +92,7 @@ class LfuCache : public Policy<Key, Value> {
         std::optional<std::pair<Key, Value>> evicted;
 
         // 如果缓存已满，删除最不经常使用的节点
-        if (nodeMap_.size() >= capacity_) {
-            evicted = kickOut();
-        }
+        if (nodeMap_.size() >= capacity_) evicted = kickOut();
 
         // 创建节点并添加到缓存中
         NodePtr node = std::make_shared<Node>(key, value);
@@ -128,21 +126,18 @@ class LfuCache : public Policy<Key, Value> {
             if (it != freqToFreqListMap_.end() && it->second->isEmpty()) {
                 minFreq_++;
             }
+            // 这里没有删除已空链表，再次出现相应访问频次的节点时，直接添加到链表
         }
     }
 
     // 移除最不经常使用的节点
-    // 调用方需持有锁；只做数据结构变更，不触发回调，由上层在锁外分发
+    // 只做数据结构变更，不触发回调，由上层在锁外分发
     std::optional<std::pair<Key, Value>> kickOut() {
         auto it = freqToFreqListMap_.find(minFreq_);
-        if (it == freqToFreqListMap_.end()) {
-            return std::nullopt;
-        }
+        if (it == freqToFreqListMap_.end()) return std::nullopt;
 
         auto node = it->second->getLastNode();
-        if (!node) {
-            return std::nullopt;
-        }
+        if (!node) return std::nullopt;
 
         removeFromList(node);
         nodeMap_.erase(node->key);
@@ -150,6 +145,9 @@ class LfuCache : public Policy<Key, Value> {
         return std::make_pair(std::move(node->key), std::move(node->value));
     }
 
+    // 添加节点到频率链表
+    // 只负责添加节点到频率链表，不负责更新最小访问频次
+    // 线程安全由调用方负责
     void addToList(NodePtr node) {
         size_t freq = node->freq;
 
@@ -163,6 +161,9 @@ class LfuCache : public Policy<Key, Value> {
         freqToFreqListMap_[freq]->addNode(node);
     }
 
+    // 从频率链表中移除节点
+    // 只负责从频率链表中移除节点，不负责更新最小访问频次
+    // 线程安全由调用方负责
     void removeFromList(NodePtr node) {
         size_t freq = node->freq;
 
@@ -178,7 +179,7 @@ class LfuCache : public Policy<Key, Value> {
     size_t capacity_;           // 总缓存容量
     size_t minFreq_;            // 最小访问频次，用于快速查找最小访问频次链表
     mutable std::mutex mutex_;  // size() 为 const，需 mutable 才能加锁
-    NodeMap nodeMap_;
-    FreqToFreqListMap freqToFreqListMap_;  // 访问频次 ： 访问频次链表
+    NodeMap nodeMap_;           // keyToNode
+    FreqToFreqListMap freqToFreqListMap_;  // freqToList
 };
 }  // namespace louis::cache

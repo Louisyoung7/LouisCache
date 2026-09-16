@@ -58,14 +58,12 @@ class FreqList {
         }
     }
 
-    // 不包括尾节点
-    // 用于删除最不经常访问的节点
+    // 获取频率链表的最后一个节点
+    // 不包括尾节点，用于删除最不经常访问的节点
     NodePtr getLastNode() const {
         auto lastNode = dummyTail_->prev.lock();
 
-        if (lastNode == dummyHead_) {
-            return nullptr;
-        }
+        if (lastNode == dummyHead_) return nullptr;
 
         return lastNode;
     }
