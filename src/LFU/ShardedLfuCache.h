@@ -7,27 +7,30 @@
 #include <thread>
 #include <vector>
 
-#include "LFU/LfuAgingCache.h"
+#include "LFU/LfuCache.h"
 #include "Policy.h"
 
 namespace louis::cache {
 template <typename Key, typename Value, typename HashFunc = std::hash<Key>>
 class ShardedLfuCache : public Policy<Key, Value> {
-    size_t capacity_;                                                         // 总缓存容量
-    int sliceNum_;                                                            // 分片数量
-    std::vector<std::unique_ptr<LfuAgingCache<Key, Value>>> lfuSliceCaches_;  // 存储每一个缓存分片的向量
-    HashFunc hashFunc_;                                                       // 哈希函数
+    size_t capacity_;                                                    // 总缓存容量
+    int sliceNum_;                                                       // 分片数量
+    std::vector<std::unique_ptr<LfuCache<Key, Value>>> lfuSliceCaches_;  // 存储每一个缓存分片的向量
+    HashFunc hashFunc_;                                                  // 哈希函数
 
    public:
-    explicit ShardedLfuCache(size_t capacity, int sliceNum = std::thread::hardware_concurrency(),
-                             int maxAvgFreq = 100000)
+    explicit ShardedLfuCache(
+        size_t capacity, int sliceNum = std::thread::hardware_concurrency(), int maxAvgFreq = 100000
+    )
         : capacity_(capacity), sliceNum_(sliceNum) {
         // 计算每一个分片的容量
         size_t sliceSize = std::ceil(capacity_ / static_cast<double>(sliceNum_));
 
         // 填充向量
         for (int i = 0; i < sliceNum_; ++i) {
-            lfuSliceCaches_.emplace_back(std::make_unique<LfuAgingCache<Key, Value>>(sliceSize, maxAvgFreq));
+            lfuSliceCaches_.emplace_back(
+                std::make_unique<LfuCache<Key, Value>>(sliceSize, maxAvgFreq)
+            );
         }
     }
 
@@ -48,8 +51,6 @@ class ShardedLfuCache : public Policy<Key, Value> {
     }
 
    private:
-    size_t hash(Key key) {
-        return hashFunc_(key);
-    }
+    size_t hash(Key key) { return hashFunc_(key); }
 };
 }  // namespace louis::cache

@@ -11,7 +11,7 @@
 
 namespace louis::cache {
 template <typename Key, typename Value>
-class LfuAgingCache : public Policy<Key, Value> {
+class LfuCache : public Policy<Key, Value> {
     using Node = typename FreqList<Key, Value>::LfuNode;
     using NodePtr = std::shared_ptr<Node>;
     using NodeMap = std::unordered_map<Key, NodePtr>;
@@ -27,13 +27,12 @@ class LfuAgingCache : public Policy<Key, Value> {
     FreqToFreqListMap freqToFreqListMap_;  // 访问频次 ： 访问频次链表
 
    public:
-    LfuAgingCache(int capacity, int maxAvgFreq = 100000)
+    LfuCache(int capacity, int maxAvgFreq = 100000)
         : capacity_(capacity),
           minFreq_(std::numeric_limits<int>::max()),
           maxAvgFreq_(maxAvgFreq),
           curAvgFreq_(0),
-          curTotalFreq_(0) {
-    }
+          curTotalFreq_(0) {}
     void put(Key key, Value value) {
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = nodeMap_.find(key);
@@ -125,7 +124,7 @@ class LfuAgingCache : public Policy<Key, Value> {
 
         if (it == freqToFreqListMap_.end()) {
             // 如果没有相应链表则创建
-            freqToFreqListMap_.insert({freq,std::make_unique<FreqList<Key, Value>>(freq)});
+            freqToFreqListMap_.insert({freq, std::make_unique<FreqList<Key, Value>>(freq)});
         }
 
         freqToFreqListMap_[freq]->addNode(node);

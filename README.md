@@ -23,7 +23,7 @@ LouisCache 是一个高性能的 C++ 缓存库，实现了多种缓存替换策�
 - `ShardedLruCache` - 分片 LRU 缓存（提高并发性能）
 
 ### LFU 系列（适配中，暂未实现统一接口的 remove/size）
-- `LfuAgingCache` - 带老化机制的 LFU 缓存
+- `LfuCache` - 带老化机制的 LFU 缓存
 - `ShardedLfuCache` - 分片 LFU 缓存
 
 ### ARC 系列（适配中，暂未实现统一接口的 remove/size）
@@ -124,8 +124,8 @@ louis::cache::LruKCache<int, std::string> lrukCache(100, 500);
 louis::cache::ShardedLruCache<int, std::string> shardedCache(100);
 
 // 使用 LFU 缓存
-#include "LFU/LfuAgingCache.h"
-louis::cache::LfuAgingCache<int, std::string> lfuCache(100);
+#include "LFU/LfuCache.h"
+louis::cache::LfuCache<int, std::string> lfuCache(100);
 
 // 使用 ARC 缓存
 #include "ARC/ArcCache.h"

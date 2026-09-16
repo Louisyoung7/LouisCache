@@ -12,10 +12,8 @@ class FreqList {
         std::weak_ptr<LfuNode> prev;
         std::shared_ptr<LfuNode> next;
 
-        LfuNode() : freq(1), next(nullptr) {
-        }
-        LfuNode(Key key, Value value) : freq(1), key(key), value(value), next(nullptr) {
-        }
+        LfuNode() : freq(1), next(nullptr) {}
+        LfuNode(Key key, Value value) : freq(1), key(key), value(value), next(nullptr) {}
     };
 
     using NodePtr = std::shared_ptr<LfuNode>;
@@ -24,12 +22,14 @@ class FreqList {
     NodePtr dummyHead_;
     NodePtr dummyTail_;
 
-    template<typename K, typename V>
-    friend class LfuAgingCache;
+    template <typename K, typename V>
+    friend class LfuCache;
 
    public:
     explicit FreqList(int n)
-        : freq_(n), dummyHead_(std::make_shared<LfuNode>()), dummyTail_(std::make_shared<LfuNode>()) {
+        : freq_(n),
+          dummyHead_(std::make_shared<LfuNode>()),
+          dummyTail_(std::make_shared<LfuNode>()) {
         dummyHead_->next = dummyTail_;
         dummyTail_->prev = dummyHead_;
     }
@@ -76,8 +76,6 @@ class FreqList {
         return lastNode;
     }
 
-    bool isEmpty() const {
-        return dummyHead_->next == dummyTail_;
-    }
+    bool isEmpty() const { return dummyHead_->next == dummyTail_; }
 };
 }  // namespace louis::cache
