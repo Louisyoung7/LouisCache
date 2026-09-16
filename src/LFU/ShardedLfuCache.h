@@ -19,18 +19,14 @@ class ShardedLfuCache : public Policy<Key, Value> {
     HashFunc hashFunc_;                                                  // 哈希函数
 
    public:
-    explicit ShardedLfuCache(
-        size_t capacity, int sliceNum = std::thread::hardware_concurrency(), int maxAvgFreq = 100000
-    )
+    explicit ShardedLfuCache(size_t capacity, int sliceNum = std::thread::hardware_concurrency())
         : capacity_(capacity), sliceNum_(sliceNum) {
         // 计算每一个分片的容量
         size_t sliceSize = std::ceil(capacity_ / static_cast<double>(sliceNum_));
 
         // 填充向量
         for (int i = 0; i < sliceNum_; ++i) {
-            lfuSliceCaches_.emplace_back(
-                std::make_unique<LfuCache<Key, Value>>(sliceSize, maxAvgFreq)
-            );
+            lfuSliceCaches_.emplace_back(std::make_unique<LfuCache<Key, Value>>(sliceSize));
         }
     }
 

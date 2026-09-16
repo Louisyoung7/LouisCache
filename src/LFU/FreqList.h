@@ -1,12 +1,14 @@
 #pragma once
 
+#include <cstddef>
 #include <memory>
 
 namespace louis::cache {
 template <typename Key, typename Value>
 class FreqList {
+   public:
     struct LfuNode {
-        int freq;  // 节点访问频次
+        size_t freq;  // 节点访问频次
         Key key;
         Value value;
         std::weak_ptr<LfuNode> prev;
@@ -18,15 +20,7 @@ class FreqList {
 
     using NodePtr = std::shared_ptr<LfuNode>;
 
-    int freq_;  // 频率链表的访问频次（单个链表的每一个节点的访问频次相同）
-    NodePtr dummyHead_;
-    NodePtr dummyTail_;
-
-    template <typename K, typename V>
-    friend class LfuCache;
-
-   public:
-    explicit FreqList(int n)
+    explicit FreqList(size_t n)
         : freq_(n),
           dummyHead_(std::make_shared<LfuNode>()),
           dummyTail_(std::make_shared<LfuNode>()) {
@@ -77,5 +71,10 @@ class FreqList {
     }
 
     bool isEmpty() const { return dummyHead_->next == dummyTail_; }
+
+   private:
+    size_t freq_;  // 频率链表的访问频次（单个链表的每一个节点的访问频次相同）
+    NodePtr dummyHead_;
+    NodePtr dummyTail_;
 };
 }  // namespace louis::cache

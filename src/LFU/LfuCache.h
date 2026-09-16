@@ -1,10 +1,11 @@
 #pragma once
 
-#include <algorithm>
-#include <limits>
+#include <cstddef>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <unordered_map>
+#include <utility>
 
 #include "LFU/FreqList.h"
 #include "Policy.h"
@@ -15,39 +16,37 @@ class LfuCache : public Policy<Key, Value> {
     using Node = typename FreqList<Key, Value>::LfuNode;
     using NodePtr = std::shared_ptr<Node>;
     using NodeMap = std::unordered_map<Key, NodePtr>;
-    using FreqToFreqListMap = std::unordered_map<int, std::unique_ptr<FreqList<Key, Value>>>;
-
-    int capacity_;      // 总缓存容量
-    int minFreq_;       // 最小访问频次，用于快速查找最小访问频次链表
-    int maxAvgFreq_;    // 最大平均访问频次，用于避免访问频次溢出
-    int curAvgFreq_;    // 当前平均访问频次
-    int curTotalFreq_;  // 当前总访问频次，用于计算当前平均访问频次
-    std::mutex mutex_;
-    NodeMap nodeMap_;
-    FreqToFreqListMap freqToFreqListMap_;  // 访问频次 ： 访问频次链表
+    using FreqToFreqListMap = std::unordered_map<size_t, std::unique_ptr<FreqList<Key, Value>>>;
 
    public:
-    LfuCache(int capacity, int maxAvgFreq = 100000)
-        : capacity_(capacity),
-          minFreq_(std::numeric_limits<int>::max()),
-          maxAvgFreq_(maxAvgFreq),
-          curAvgFreq_(0),
-          curTotalFreq_(0) {}
-    void put(Key key, Value value) {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto it = nodeMap_.find(key);
+    explicit LfuCache(size_t capacity) : capacity_(capacity), minFreq_(1) {}
 
-        if (it != nodeMap_.end()) {
-            // 重置value值
-            it->second->value = value;
-            // 更新缓存项
-            getInternal(it->second, value);
-        } else {
-            putInternal(key, value);
+    // 如果缓存项存在，更新并提升其访问频次
+    // 如果缓存项不存在，添加新节点（缓存已满时先淘汰最不经常使用的节点）
+    void put(Key key, Value value) override {
+        if (capacity_ == 0) return;  // 容量 0：无处可存，直接丢弃（条目未曾驻留，不通知）
+        std::optional<std::pair<Key, Value>> evicted;  // 锁内收集，锁外分发
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto it = nodeMap_.find(key);
+
+            if (it != nodeMap_.end()) {
+                // 重置value值
+                it->second->value = value;
+                // 更新缓存项
+                getInternal(it->second, value);
+            } else {
+                evicted = putInternal(key, value);
+            }
+        }
+        if (evicted) {
+            // notifyLeave 位于依赖基类 Policy<Key, Value> 中，需 this-> 才能在实例化时找到
+            this->notifyLeave(evicted->first, evicted->second, LeaveReason::Evicted);
         }
     }
 
-    bool get(const Key& key, Value& value) {
+    // 尝试获取缓存项，如果存在则提升其访问频次
+    bool get(const Key& key, Value& value) override {
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = nodeMap_.find(key);
 
@@ -59,18 +58,42 @@ class LfuCache : public Policy<Key, Value> {
         return false;
     }
 
-    Value get(const Key& key) {
+    Value get(const Key& key) override {
         Value value{};
         get(key, value);
         return value;
     }
 
+    // 显式移除缓存项
+    void remove(const Key& key) override {
+        Value value{};
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            auto it = nodeMap_.find(key);
+            if (it == nodeMap_.end()) return;
+
+            value = std::move(it->second->value);
+            removeFromList(it->second);
+            nodeMap_.erase(it);
+        }
+        // notifyLeave 位于依赖基类 Policy<Key, Value> 中，需 this-> 才能在实例化时找到
+        this->notifyLeave(key, value, LeaveReason::Explicit);
+    }
+
+    // 获取缓存项数量
+    size_t size() const override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return nodeMap_.size();
+    }
+
    private:
-    // 只负责添加缓存项和更新各项访问频次
-    void putInternal(Key key, Value value) {
+    // 只负责添加缓存项，缓存已满时先淘汰，返回被淘汰的键值对
+    std::optional<std::pair<Key, Value>> putInternal(Key key, Value value) {
+        std::optional<std::pair<Key, Value>> evicted;
+
         // 如果缓存已满，删除最不经常使用的节点
         if (nodeMap_.size() >= capacity_) {
-            kickOut();
+            evicted = kickOut();
         }
 
         // 创建节点并添加到缓存中
@@ -78,12 +101,12 @@ class LfuCache : public Policy<Key, Value> {
         addToList(node);
         nodeMap_[key] = node;
 
-        // 更新各项访问频次
-        increaseFreq();
-        minFreq_ = std::min(minFreq_, 1);
+        // 新节点访问频次为1，最小访问频次必然是1
+        minFreq_ = 1;
+        return evicted;
     }
 
-    // 只负责查询缓存项和更新各项访问频次
+    // 只负责查询缓存项并提升其访问频次
     void getInternal(NodePtr node, Value& value) {
         // 获取值
         value = node->value;
@@ -99,26 +122,36 @@ class LfuCache : public Policy<Key, Value> {
 
         // 如果原先存在的链表因为节点移动变成了空链表，而原先链表恰好是最小访问频次链表
         // 此时需要更新最小访问频次
-        if (node->freq - 1 == minFreq_ && freqToFreqListMap_[minFreq_]->isEmpty()) {
-            minFreq_++;
+        auto oldFreq = node->freq - 1;
+        if (oldFreq == minFreq_) {
+            auto it = freqToFreqListMap_.find(oldFreq);
+            if (it != freqToFreqListMap_.end() && it->second->isEmpty()) {
+                minFreq_++;
+            }
         }
-
-        // 更新其余的访问频次项
-        increaseFreq();
     }
 
     // 移除最不经常使用的节点
-    void kickOut() {
-        auto node = freqToFreqListMap_[minFreq_]->getLastNode();
-        if (node) {
-            removeFromList(node);
-            nodeMap_.erase(node->key);
-            decreaseFreq(node->freq);
+    // 调用方需持有锁；只做数据结构变更，不触发回调，由上层在锁外分发
+    std::optional<std::pair<Key, Value>> kickOut() {
+        auto it = freqToFreqListMap_.find(minFreq_);
+        if (it == freqToFreqListMap_.end()) {
+            return std::nullopt;
         }
+
+        auto node = it->second->getLastNode();
+        if (!node) {
+            return std::nullopt;
+        }
+
+        removeFromList(node);
+        nodeMap_.erase(node->key);
+
+        return std::make_pair(std::move(node->key), std::move(node->value));
     }
 
     void addToList(NodePtr node) {
-        int freq = node->freq;
+        size_t freq = node->freq;
 
         auto it = freqToFreqListMap_.find(freq);
 
@@ -131,7 +164,7 @@ class LfuCache : public Policy<Key, Value> {
     }
 
     void removeFromList(NodePtr node) {
-        int freq = node->freq;
+        size_t freq = node->freq;
 
         auto it = freqToFreqListMap_.find(freq);
 
@@ -142,84 +175,10 @@ class LfuCache : public Policy<Key, Value> {
         }
     }
 
-    // 增加访问次数
-    void increaseFreq() {
-        curTotalFreq_++;
-        if (nodeMap_.empty()) {
-            curAvgFreq_ = 0;
-        } else {
-            curAvgFreq_ = curTotalFreq_ / nodeMap_.size();
-        }
-
-        // 如果当前平均访问次数超出阈值，需要处理
-        if (curAvgFreq_ >= maxAvgFreq_) {
-            handleOverMaxAvgFreq();
-        }
-    }
-
-    // 减少访问次数
-    void decreaseFreq(int n) {
-        curTotalFreq_ -= n;
-        if (nodeMap_.empty()) {
-            curAvgFreq_ = 0;
-        } else {
-            curAvgFreq_ = curTotalFreq_ / nodeMap_.size();
-        }
-    }
-
-    // 处理当前平均访问次数超出阈值的情况
-    // 将所有节点的访问频次都减去 maxAvgFreq / 2
-    void handleOverMaxAvgFreq() {
-        // 确定衰减因子
-        int decay = maxAvgFreq_ / 2;
-
-        // 遍历节点映射
-        for (auto it = nodeMap_.begin(); it != nodeMap_.end(); ++it) {
-            if (!it->second) {
-                continue;
-            }
-
-            // 获取节点
-            auto node = it->second;
-
-            // 先将节点移除
-            removeFromList(node);
-
-            // 保留原先的访问频次
-            int oldFreq = node->freq;
-
-            // 访问频次减去衰减因子
-            node->freq -= decay;
-
-            if (node->freq <= 0) {
-                node->freq = 1;
-            }
-
-            // 获取访问频次的变化量
-            int delta = node->freq - oldFreq;
-
-            // 更新总访问频次
-            curTotalFreq_ += delta;
-
-            // 再将节点重新加入
-            addToList(node);
-        }
-    }
-
-    // 更新最小访问频次
-    void updateMinFreq() {
-        minFreq_ = std::numeric_limits<int>::max();
-        // 遍历频率链表映射，从中选出最小访问频次
-        for (const auto& pair : freqToFreqListMap_) {
-            if (pair.second && !pair.second->isEmpty()) {
-                minFreq_ = std::min(minFreq_, pair.first);
-            }
-        }
-
-        // 如果映射为空，将最小访问频次初始化为1
-        if (minFreq_ == std::numeric_limits<int>::max()) {
-            minFreq_ = 1;
-        }
-    }
+    size_t capacity_;           // 总缓存容量
+    size_t minFreq_;            // 最小访问频次，用于快速查找最小访问频次链表
+    mutable std::mutex mutex_;  // size() 为 const，需 mutable 才能加锁
+    NodeMap nodeMap_;
+    FreqToFreqListMap freqToFreqListMap_;  // 访问频次 ： 访问频次链表
 };
 }  // namespace louis::cache
