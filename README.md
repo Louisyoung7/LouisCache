@@ -22,9 +22,9 @@ LouisCache 是一个高性能的 C++ 缓存库，实现了多种缓存替换策�
 - `LruKCache` - K 最近最少使用缓存（访问 k 次后晋升进主缓存）
 - `ShardedLruCache` - 分片 LRU 缓存（提高并发性能）
 
-### LFU 系列（适配中，暂未实现统一接口的 remove/size）
-- `LfuCache` - 带老化机制的 LFU 缓存
-- `ShardedLfuCache` - 分片 LFU 缓存
+### LFU 系列（已适配统一接口）
+- `LfuCache` - 基础 LFU 缓存（频次最低者优先淘汰，同频次按插入顺序）
+- `ShardedLfuCache` - 分片 LFU 缓存（提高并发性能）
 
 ### ARC 系列（适配中，暂未实现统一接口的 remove/size）
 - `ArcCache` - 自适应替换缓存（结合 LRU 和 LFU 的优点）
@@ -127,12 +127,16 @@ louis::cache::ShardedLruCache<int, std::string> shardedCache(100);
 #include "LFU/LfuCache.h"
 louis::cache::LfuCache<int, std::string> lfuCache(100);
 
+// 使用分片 LFU 缓存（提高并发性能）
+#include "LFU/ShardedLfuCache.h"
+louis::cache::ShardedLfuCache<int, std::string> shardedLfuCache(100);
+
 // 使用 ARC 缓存
 #include "ARC/ArcCache.h"
 louis::cache::ArcCache<int, std::string> arcCache(100);
 ```
 
-> 注意：LFU 与 ARC 系列正在适配统一接口（`remove`/`size`），当前尚为抽象类，无法直接实例化。
+> 注意：ARC 系列正在适配统一接口（`remove`/`size`），当前尚为抽象类，无法直接实例化。
 
 ### 缓存项离开通知（LeaveCallback）
 
@@ -169,7 +173,7 @@ cache.put(3, "value3");  // 1 被淘汰，触发回调
 
 ## 测试
 
-单元测试基于 Google Test，覆盖各策略的基础行为、淘汰语义、LeaveCallback 触发与静默场景、回调重入安全及多线程并发，当前 82 个用例全部通过（见上文构建步骤）。
+单元测试基于 Google Test，覆盖各策略的基础行为、淘汰语义、LeaveCallback 触发与静默场景、回调重入安全及多线程并发，当前 143 个用例全部通过（见上文构建步骤）。
 
 ## 缓存策略选择指南
 
@@ -181,7 +185,8 @@ cache.put(3, "value3");  // 1 被淘汰，触发回调
 
 - 各实现内部以锁保证多线程访问安全；复合实现（如 `LruKCache`）以单锁串行化公共方法，保证复合操作原子
 - 分片实现（`ShardedLruCache`、`ShardedLfuCache`）以独立锁降低锁竞争，提高并发吞吐；分片容量精确分摊，各分片容量之和恰为总容量
-- `ShardedLruCache` 的 `size()` 为各分片分别加锁后求和，多线程下不是原子快照（分片结构的固有属性）
+- 分片实现的 `size()` 为各分片分别加锁后求和，多线程下不是原子快照（分片结构的固有属性）
+- 分片实现的拷贝与移动被禁用：分片回调捕获宿主对象指针，移动会导致悬垂
 - 回调分发不持有缓存内部锁，回调内重入缓存安全（见 LeaveCallback 约定）
 
 ## 许可证
