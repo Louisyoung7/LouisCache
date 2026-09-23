@@ -15,8 +15,10 @@ class ArcLruPart {
     using NodeMap = std::unordered_map<Key, NodePtr>;
 
    public:
-    ArcLruPart(size_t capacity, size_t transformThreshold)
-        : capacity_(capacity), ghostCapacity_(capacity), transformThreshold_(transformThreshold) {
+    // 空构造：容量（主缓存与幽灵缓存）不在此处给定，
+    // 由 ArcCache::applyPartitions 按自适应参数 p 统一设置
+    explicit ArcLruPart(size_t transformThreshold)
+        : capacity_(0), ghostCapacity_(0), transformThreshold_(transformThreshold) {
         initializeLists();
     }
 

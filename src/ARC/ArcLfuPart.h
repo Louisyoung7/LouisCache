@@ -18,10 +18,9 @@ class ArcLfuPart {
     using FreqListMap = std::map<size_t, std::list<NodePtr>>;
 
    public:
-    explicit ArcLfuPart(size_t capacity)
-        : capacity_(capacity), ghostCapacity_(capacity), minFreq_(0) {
-        initializeLists();
-    }
+    // 空构造：容量（主缓存与幽灵缓存）不在此处给定，
+    // 由 ArcCache::applyPartitions 按自适应参数 p 统一设置
+    ArcLfuPart() : capacity_(0), ghostCapacity_(0), minFreq_(0) { initializeLists(); }
 
     void put(Key key, Value value) {
         auto it = mainCache_.find(key);

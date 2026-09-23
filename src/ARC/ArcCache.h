@@ -18,14 +18,16 @@ namespace louis::cache {
 template <typename Key, typename Value>
 class ArcCache : public Policy<Key, Value> {
    public:
+    // 两个部分均空构造（初始容量为 0），
+    // 主缓存与幽灵缓存的容量划分统一由 applyPartitions() 按自适应参数 p 决定
     explicit ArcCache(size_t capacity, size_t transformThreshold = 2)
         : capacity_(capacity),
           // p 为 T1 的目标容量。原论文中 p 初值为 0，本实现取均分，
           // 以免初始时某一侧目标容量为 0
           p_(capacity / 2),
           transformThreshold_(transformThreshold),
-          lruPart_(std::make_unique<ArcLruPart<Key, Value>>(capacity, transformThreshold)),
-          lfuPart_(std::make_unique<ArcLfuPart<Key, Value>>(capacity)) {
+          lruPart_(std::make_unique<ArcLruPart<Key, Value>>(transformThreshold)),
+          lfuPart_(std::make_unique<ArcLfuPart<Key, Value>>()) {
         applyPartitions();
     }
 
