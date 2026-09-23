@@ -4,12 +4,12 @@
 #include <list>
 #include <map>
 #include <memory>
-#include <mutex>
 #include <unordered_map>
 
 #include "ARC/ArcNode.h"
 
 namespace louis::cache {
+// 内部组件：不自行加锁，线程安全由调用方（ArcCache）的锁保证
 template <typename Key, typename Value>
 class ArcLfuPart {
     using NodeType = ArcNode<Key, Value>;
@@ -17,39 +17,21 @@ class ArcLfuPart {
     using NodeMap = std::unordered_map<Key, NodePtr>;
     using FreqListMap = std::map<size_t, std::list<NodePtr>>;
 
-    size_t capacity_;
-    size_t ghostCapacity_;
-    size_t minFreq_;  // 最小访问频次，用于快速定位最小访问频次链表
-    std::mutex mutex_;
-
-    NodeMap mainCache_;        // 主缓存映射
-    NodeMap ghostCache_;       // 幽灵缓存映射，存储从主缓存移除的缓存项
-    FreqListMap freqListMap_;  // 频率链表映射，快速访问不同频次的链表
-    NodePtr ghostHead_;
-    NodePtr ghostTail_;
-
    public:
     ArcLfuPart(int capacity) : capacity_(capacity), ghostCapacity_(capacity), minFreq_(0) {
         initializeLists();
     }
 
-    bool put(Key key, Value value) {
-        std::lock_guard<std::mutex> lock(mutex_);
+    void put(Key key, Value value) {
         auto it = mainCache_.find(key);
-
         if (it != mainCache_.end()) {
             updateExistingNode(it->second, value);
-            return true;
         } else {
             addNewNode(key, value);
-            return true;
         }
-
-        return false;
     }
 
     bool get(const Key& key, Value& value) {
-        std::lock_guard<std::mutex> lock(mutex_);
         auto it = mainCache_.find(key);
 
         if (it != mainCache_.end()) {
@@ -57,17 +39,51 @@ class ArcLfuPart {
             updateNodeFreq(it->second);
             return true;
         }
-
         return false;
     }
 
-    // 检查主缓存释放包含指定键
-    bool contain(const Key& key) {
-        return mainCache_.find(key) != mainCache_.end();
+    void remove(const Key& key) {
+        auto it = mainCache_.find(key);
+        if (it == mainCache_.end()) return;
+
+        auto node = it->second;
+        size_t freq = node->getAccessCount();
+
+        // 节点存于对应频次的链表中，需先摘除，再维护频次映射与最小访问频次
+        auto listIt = freqListMap_.find(freq);
+        if (listIt != freqListMap_.end()) {
+            listIt->second.remove(node);
+            if (listIt->second.empty()) {
+                freqListMap_.erase(listIt);
+                if (freq == minFreq_) {
+                    minFreq_ = freqListMap_.empty() ? 0 : freqListMap_.begin()->first;
+                }
+            }
+        }
+
+        mainCache_.erase(it);
+    }
+
+    size_t size() const { return mainCache_.size(); }
+
+    // 检查主缓存是否包含指定键
+    bool contain(const Key& key) { return mainCache_.find(key) != mainCache_.end(); }
+
+    // 增加主缓存容量
+    void increaseCapacity() { capacity_++; }
+
+    // 减少主缓存容量
+    bool decreaseCapacity() {
+        if (capacity_ <= 0) return false;
+
+        if (mainCache_.size() == capacity_) evictLeastFreq();
+
+        --capacity_;
+        return true;
     }
 
     // 检查幽灵缓存是否包含指定键，并删除该缓存项
-    bool checkGhost(const Key& key) {
+    bool tryToRemoveGhost(const Key& key) {
         auto it = ghostCache_.find(key);
 
         if (it != ghostCache_.end()) {
@@ -75,27 +91,7 @@ class ArcLfuPart {
             ghostCache_.erase(it);
             return true;
         }
-
         return false;
-    }
-
-    // 增加主缓存容量
-    void increaseCapacity() {
-        capacity_++;
-    }
-
-    // 减少主缓存容量
-    bool decreaseCapacity() {
-        if (capacity_ <= 0) {
-            return false;
-        }
-
-        if (mainCache_.size() == capacity_) {
-            evictLeastFreq();
-        }
-
-        capacity_--;
-        return true;
     }
 
    private:
@@ -109,18 +105,14 @@ class ArcLfuPart {
     }
 
     // 更新已有节点的值
-    bool updateExistingNode(NodePtr node, const Value& value) {
+    void updateExistingNode(NodePtr node, const Value& value) {
         node->setValue(value);
         updateNodeFreq(node);
-        return true;
     }
 
-    // 添加到头部
-    bool addNewNode(const Key& key, const Value& value) {
+    void addNewNode(const Key& key, const Value& value) {
         // 如果主缓存容量已满，先驱逐最旧的节点
-        if (mainCache_.size() >= capacity_) {
-            evictLeastFreq();
-        }
+        if (mainCache_.size() >= capacity_) evictLeastFreq();
 
         // 创建节点添加到链表中
         // 如果链表不存在要先创建
@@ -133,8 +125,6 @@ class ArcLfuPart {
 
         // 更新最小访问频次
         minFreq_ = 1;
-
-        return true;
     }
 
     // 更新节点访问频次，同时维护频率链表映射
@@ -166,15 +156,12 @@ class ArcLfuPart {
 
     // 从主缓存驱逐最少使用频次的节点，并添加到幽灵缓存链表
     void evictLeastFreq() {
-        if (freqListMap_.empty()) {
-            return;
-        }
+        if (freqListMap_.empty()) return;
 
         // 移除最小访问频次链表的最后一个节点
         auto& leastList = freqListMap_[minFreq_];
-        if (leastList.empty()) {
-            return;
-        }
+        if (leastList.empty()) return;
+
         auto node = leastList.back();
         leastList.pop_back();
         mainCache_.erase(node->getKey());
@@ -188,36 +175,18 @@ class ArcLfuPart {
                 minFreq_ = 0;
             }
         }
+
         // 如果幽灵缓存链表满了，移除幽灵缓存链表最旧的节点
-        if (ghostCache_.size() >= ghostCapacity_) {
-            removeOldestGhost();
-        }
+        if (ghostCache_.size() >= ghostCapacity_) removeOldestGhost();
 
         // 添加到幽灵缓存链表
         addToGhost(node);
     }
 
-    // 从幽灵缓存链表移除节点
-    void removeFromGhost(NodePtr node) {
-        if (node->prev_.expired() || node->next_ == nullptr) {
-            return;
-        }
+    /// Ghost Cache 操作
 
-        auto prev = node->prev_.lock();
-        auto next = node->next_;
-
-        prev->next_ = next;
-        next->prev_ = prev;
-
-        node->prev_.reset();
-        node->next_ = nullptr;
-    }
-
-    // 添加到头部
     void addToGhost(NodePtr node) {
-        if (ghostCache_.size() >= ghostCapacity_) {
-            removeOldestGhost();
-        }
+        if (ghostCache_.size() >= ghostCapacity_) removeOldestGhost();
 
         auto prev = ghostHead_;
         auto next = ghostHead_->next_;
@@ -231,15 +200,37 @@ class ArcLfuPart {
         ghostCache_[node->getKey()] = node;
     }
 
+    void removeFromGhost(NodePtr node) {
+        if (node->prev_.expired() || node->next_ == nullptr) return;
+
+        auto prev = node->prev_.lock();
+        auto next = node->next_;
+
+        prev->next_ = next;
+        next->prev_ = prev;
+
+        node->prev_.reset();
+        node->next_ = nullptr;
+    }
+
     // 从幽灵缓存中移除最旧的缓存项
     void removeOldestGhost() {
         auto oldestNode = ghostTail_->prev_.lock();
-        if (oldestNode == nullptr || oldestNode == ghostHead_) {
-            return;
-        }
+        if (oldestNode == nullptr || oldestNode == ghostHead_) return;
 
         removeFromGhost(oldestNode);
         ghostCache_.erase(oldestNode->getKey());
     }
+
+    size_t capacity_;
+    NodeMap mainCache_;
+    FreqListMap freqListMap_;  // LFU
+
+    size_t ghostCapacity_;
+    NodeMap ghostCache_;
+    NodePtr ghostHead_;  // LRU
+    NodePtr ghostTail_;
+
+    size_t minFreq_;  // 最小访问频次，用于快速定位最小访问频次链表
 };
 }  // namespace louis::cache
