@@ -18,7 +18,8 @@ class ArcLfuPart {
     using FreqListMap = std::map<size_t, std::list<NodePtr>>;
 
    public:
-    ArcLfuPart(int capacity) : capacity_(capacity), ghostCapacity_(capacity), minFreq_(0) {
+    explicit ArcLfuPart(size_t capacity)
+        : capacity_(capacity), ghostCapacity_(capacity), minFreq_(0) {
         initializeLists();
     }
 
@@ -69,18 +70,22 @@ class ArcLfuPart {
     // 检查主缓存是否包含指定键
     bool contain(const Key& key) { return mainCache_.find(key) != mainCache_.end(); }
 
-    // 增加主缓存容量
-    void increaseCapacity() { capacity_++; }
-
-    // 减少主缓存容量
-    bool decreaseCapacity() {
-        if (capacity_ <= 0) return false;
-
-        if (mainCache_.size() == capacity_) evictLeastFreq();
-
-        --capacity_;
-        return true;
+    // 设置主缓存目标容量（ARC 中 T2 的目标容量，即 总容量 - p）
+    // 缩容时按频次由低到高把溢出条目移入幽灵缓存
+    void setCapacity(size_t capacity) {
+        capacity_ = capacity;
+        while (mainCache_.size() > capacity_) evictLeastFreq();
     }
+
+    // 设置幽灵缓存容量（对应 ARC 不变量 |T2| + |B2| <= 总容量）
+    // 缩容时丢弃最旧的幽灵条目
+    void setGhostCapacity(size_t ghostCapacity) {
+        ghostCapacity_ = ghostCapacity;
+        while (ghostCache_.size() > ghostCapacity_) removeOldestGhost();
+    }
+
+    // 幽灵缓存条目数，供 ARC 计算自适应增量使用
+    size_t ghostSize() const { return ghostCache_.size(); }
 
     // 检查幽灵缓存是否包含指定键，并删除该缓存项
     bool tryToRemoveGhost(const Key& key) {
@@ -111,6 +116,8 @@ class ArcLfuPart {
     }
 
     void addNewNode(const Key& key, const Value& value) {
+        if (capacity_ == 0) return;  // 目标容量为 0：该部分暂不驻留条目
+
         // 如果主缓存容量已满，先驱逐最旧的节点
         if (mainCache_.size() >= capacity_) evictLeastFreq();
 
@@ -156,19 +163,18 @@ class ArcLfuPart {
 
     // 从主缓存驱逐最少使用频次的节点，并添加到幽灵缓存链表
     void evictLeastFreq() {
-        if (freqListMap_.empty()) return;
+        // 用 find 而非 operator[]，避免为不存在的频次插入空链表而污染 freqListMap_
+        auto listIt = freqListMap_.find(minFreq_);
+        if (listIt == freqListMap_.end() || listIt->second.empty()) return;
 
         // 移除最小访问频次链表的最后一个节点
-        auto& leastList = freqListMap_[minFreq_];
-        if (leastList.empty()) return;
-
-        auto node = leastList.back();
-        leastList.pop_back();
+        auto node = listIt->second.back();
+        listIt->second.pop_back();
         mainCache_.erase(node->getKey());
 
         // 如果移除的节点恰好是最后一个节点，移除后链表为空，需要更新最小访问频次
-        if (leastList.empty()) {
-            freqListMap_.erase(minFreq_);
+        if (listIt->second.empty()) {
+            freqListMap_.erase(listIt);
             if (!freqListMap_.empty()) {
                 minFreq_ = freqListMap_.begin()->first;
             } else {
@@ -176,10 +182,7 @@ class ArcLfuPart {
             }
         }
 
-        // 如果幽灵缓存链表满了，移除幽灵缓存链表最旧的节点
-        if (ghostCache_.size() >= ghostCapacity_) removeOldestGhost();
-
-        // 添加到幽灵缓存链表
+        // 添加到幽灵缓存链表（addToGhost 内部维护幽灵缓存容量上限）
         addToGhost(node);
     }
 

@@ -57,19 +57,22 @@ class ArcLruPart {
     // 检查主缓存是否包含指定键
     bool contain(const Key& key) { return mainCache_.find(key) != mainCache_.end(); }
 
-    // 增加主缓存容量
-    void increaseCapacity() { ++capacity_; }
-
-    // 减少主缓存容量
-    bool decreaseCapacity() {
-        if (capacity_ <= 0) return false;
-
-        // 如果缓存已满，要先移除最旧的缓存项
-        if (mainCache_.size() == capacity_) evictLeastRecent();
-
-        --capacity_;
-        return true;
+    // 设置主缓存目标容量（ARC 中 T1 的目标容量 p）
+    // 缩容时按 LRU 顺序把溢出条目移入幽灵缓存
+    void setCapacity(size_t capacity) {
+        capacity_ = capacity;
+        while (mainCache_.size() > capacity_) evictLeastRecent();
     }
+
+    // 设置幽灵缓存容量（对应 ARC 不变量 |T1| + |B1| <= 总容量）
+    // 缩容时丢弃最旧的幽灵条目
+    void setGhostCapacity(size_t ghostCapacity) {
+        ghostCapacity_ = ghostCapacity;
+        while (ghostCache_.size() > ghostCapacity_) removeOldestGhost();
+    }
+
+    // 幽灵缓存条目数，供 ARC 计算自适应增量使用
+    size_t ghostSize() const { return ghostCache_.size(); }
 
     // 在幽灵缓存链表中检查指定键，并删除指定缓存项
     bool tryToRemoveGhost(Key key) {
@@ -103,6 +106,8 @@ class ArcLruPart {
     }
 
     void addNewNode(const Key& key, const Value& value) {
+        if (capacity_ == 0) return;  // 目标容量为 0：该部分暂不驻留条目
+
         if (mainCache_.size() >= capacity_) evictLeastRecent();
 
         auto node = std::make_shared<NodeType>(key, value);
