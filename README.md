@@ -26,8 +26,8 @@ LouisCache 是一个高性能的 C++ 缓存库，实现了多种缓存替换策�
 - `LfuCache` - 基础 LFU 缓存（频次最低者优先淘汰，同频次按插入顺序）
 - `ShardedLfuCache` - 分片 LFU 缓存（提高并发性能）
 
-### ARC 系列（适配中，暂未实现统一接口的 remove/size）
-- `ArcCache` - 自适应替换缓存（结合 LRU 和 LFU 的优点）
+### ARC 系列（已适配统一接口）
+- `ArcCache` - 自适应替换缓存：T1（LRU 部分）与 T2（LFU 部分）共享总容量，由自适应参数 p 动态划分；命中幽灵缓存（B1/B2）时按两侧幽灵缓存大小的比例调整 p，自动在"近期性"与"频次"之间倾斜
 
 ## 项目结构
 
@@ -131,12 +131,10 @@ louis::cache::LfuCache<int, std::string> lfuCache(100);
 #include "LFU/ShardedLfuCache.h"
 louis::cache::ShardedLfuCache<int, std::string> shardedLfuCache(100);
 
-// 使用 ARC 缓存
+// 使用 ARC 缓存（第二个参数为转换阈值，条目访问达到阈值后从 T1 晋升到 T2，默认 2）
 #include "ARC/ArcCache.h"
 louis::cache::ArcCache<int, std::string> arcCache(100);
 ```
-
-> 注意：ARC 系列正在适配统一接口（`remove`/`size`），当前尚为抽象类，无法直接实例化。
 
 ### 缓存项离开通知（LeaveCallback）
 
@@ -169,11 +167,12 @@ cache.put(3, "value3");  // 1 被淘汰，触发回调
 
 - **锁外分发**：回调在缓存内部锁全部释放后触发，回调内可安全重入缓存任意方法（如再调 `get`/`put`/`size`），不会死锁，且能观察到离开后的最终状态
 - **变更完成后触发**：回调触发时条目已从缓存移除，`size()` 等查询反映最终状态
-- **内部变动不通知**：复合结构（如 `LruKCache`）中，条目在主缓存与历史队列间的晋升、历史队列自身的淘汰对外不可见，不触发回调；只有条目真正"离开缓存"时才通知
+- **内部变动不通知**：复合结构中，条目在内部各部分间的流转对外不可见，不触发回调；只有条目真正"离开缓存"时才通知。例如 `LruKCache` 中历史队列的晋升与淘汰、`ArcCache` 中条目从 T1（LRU 部分）到 T2（LFU 部分）的迁移、以及幽灵缓存（B1/B2）自身的挤出与命中均静默
+- **ARC 特有语义**：`ArcCache` 中 T1、T2 任一主缓存部分发生容量驱逐均通知 `Evicted`；由于命中幽灵缓存会触发容量重划分、可能挤出对侧主缓存条目，因此 `get` 未命中也可能产生 `Evicted` 事件
 
 ## 测试
 
-单元测试基于 Google Test，覆盖各策略的基础行为、淘汰语义、LeaveCallback 触发与静默场景、回调重入安全及多线程并发，当前 143 个用例全部通过（见上文构建步骤）。
+单元测试基于 Google Test，覆盖各策略的基础行为、淘汰语义、LeaveCallback 触发与静默场景、回调重入安全及多线程并发，当前 175 个用例全部通过（见上文构建步骤）。
 
 ## 缓存策略选择指南
 
