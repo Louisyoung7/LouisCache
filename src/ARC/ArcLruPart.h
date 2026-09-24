@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <memory>
 #include <unordered_map>
+#include <vector>
 
 #include "ARC/ArcNode.h"
 
@@ -23,14 +24,15 @@ class ArcLruPart {
     }
 
     // 增加或更新缓存项
-    void put(Key key, Value value, bool& shouldTransform) {
+    // 返回为腾出空间而驱逐的节点（已移入幽灵缓存，shared_ptr 仍有效）；无驱逐返回 nullptr
+    NodePtr put(Key key, Value value, bool& shouldTransform) {
         shouldTransform = false;
         auto it = mainCache_.find(key);
         if (it != mainCache_.end()) {
             updateExistingNode(it->second, value, shouldTransform);
-        } else {
-            addNewNode(key, value);
+            return nullptr;
         }
+        return addNewNode(key, value);
     }
 
     // 获取缓存项，通过传出参数确定是否需要转换到LFU部分
@@ -46,12 +48,15 @@ class ArcLruPart {
         return false;
     }
 
-    void remove(const Key& key) {
+    // 移除缓存项，返回被移除的节点；不存在则返回 nullptr
+    NodePtr remove(const Key& key) {
         auto it = mainCache_.find(key);
-        if (it != mainCache_.end()) {
-            removeFromMain(it->second);
-            mainCache_.erase(it);
-        }
+        if (it == mainCache_.end()) return nullptr;
+
+        NodePtr node = it->second;
+        removeFromMain(node);
+        mainCache_.erase(it);
+        return node;
     }
 
     size_t size() const { return mainCache_.size(); }
@@ -60,10 +65,14 @@ class ArcLruPart {
     bool contain(const Key& key) { return mainCache_.find(key) != mainCache_.end(); }
 
     // 设置主缓存目标容量（ARC 中 T1 的目标容量 p）
-    // 缩容时按 LRU 顺序把溢出条目移入幽灵缓存
-    void setCapacity(size_t capacity) {
+    // 缩容时按 LRU 顺序把溢出条目移入幽灵缓存，并返回这些条目
+    std::vector<NodePtr> setCapacity(size_t capacity) {
         capacity_ = capacity;
-        while (mainCache_.size() > capacity_) evictLeastRecent();
+        std::vector<NodePtr> evicted;
+        while (mainCache_.size() > capacity_) {
+            if (auto node = evictLeastRecent()) evicted.push_back(node);
+        }
+        return evicted;
     }
 
     // 设置幽灵缓存容量（对应 ARC 不变量 |T1| + |B1| <= 总容量）
@@ -107,14 +116,17 @@ class ArcLruPart {
         moveToMostRecent(node);
     }
 
-    void addNewNode(const Key& key, const Value& value) {
-        if (capacity_ == 0) return;  // 目标容量为 0：该部分暂不驻留条目
+    // 新增节点，返回为腾出空间而驱逐的节点；未发生驱逐或目标容量为 0 时返回 nullptr
+    NodePtr addNewNode(const Key& key, const Value& value) {
+        if (capacity_ == 0) return nullptr;  // 目标容量为 0：该部分暂不驻留条目
 
-        if (mainCache_.size() >= capacity_) evictLeastRecent();
+        NodePtr evicted = nullptr;
+        if (mainCache_.size() >= capacity_) evicted = evictLeastRecent();
 
         auto node = std::make_shared<NodeType>(key, value);
         addToMain(node);
         mainCache_[key] = node;
+        return evicted;
     }
 
     // 更新节点访问次数，并返回是否需要转换到LFU部分
@@ -158,9 +170,10 @@ class ArcLruPart {
     }
 
     // 从主缓存链表驱逐最旧节点，并移动到幽灵缓存链表
-    void evictLeastRecent() {
+    // 返回被驱逐的节点；主缓存为空时返回 nullptr
+    NodePtr evictLeastRecent() {
         auto oldest = mainTail_->prev_.lock();
-        if (oldest == mainHead_ || oldest == nullptr) return;
+        if (oldest == mainHead_ || oldest == nullptr) return nullptr;
 
         // 从主缓存链表移除
         removeFromMain(oldest);
@@ -170,6 +183,7 @@ class ArcLruPart {
 
         // 将节点添加到幽灵缓存链表
         addToGhost(oldest);
+        return oldest;
     }
 
     /// Ghost Cache 操作

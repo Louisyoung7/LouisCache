@@ -2,14 +2,19 @@
 
 #include <gtest/gtest.h>
 
+#include <mutex>
 #include <random>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
+
+#include "Policy.h"
 
 namespace {
 
 using louis::cache::ArcCache;
+using louis::cache::LeaveReason;
 
 // ============ 基础 put / get / remove ============
 
@@ -400,6 +405,280 @@ TEST(ArcCacheTest, ConcurrentMixedOpsWithRemove) {
         thread.join();
     }
 
+    EXPECT_LE(cache.size(), static_cast<size_t>(kCapacity));
+}
+
+// ============ LeaveCallback ============
+// 语义约定：
+//   1. 主缓存（T1 / T2）条目被驱逐 -> Evicted，此时条目已不可被 get 到
+//   2. 显式 remove 命中主缓存 -> Explicit
+//   3. 条目在缓存内部从 T1 迁移到 T2、以及幽灵缓存的自身流转 -> 不通知
+
+// 回调事件记录器：内部带锁，兼容多线程回调
+struct LeaveRecord {
+    int key;
+    int value;
+    LeaveReason reason;
+};
+
+class LeaveRecorder {
+   public:
+    explicit LeaveRecorder(ArcCache<int, int>& cache) {
+        cache.setLeaveCallback([this](const int& k, const int& v, LeaveReason r) {
+            std::lock_guard<std::mutex> lock(mutex_);
+            records_.push_back({k, v, r});
+        });
+    }
+
+    std::vector<LeaveRecord> take() {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return std::exchange(records_, {});
+    }
+
+   private:
+    std::mutex mutex_;
+    std::vector<LeaveRecord> records_;
+};
+
+// 阈值极大使条目始终留在 T1：T1 满时按近期性驱逐并通知 Evicted
+TEST(ArcCacheLeaveCallbackTest, LruPartEvictionNotifiesEvicted) {
+    ArcCache<int, int> cache(4, 1000);  // T1 目标容量 2
+    LeaveRecorder recorder(cache);
+    cache.put(1, 10);
+    cache.put(2, 20);
+    cache.put(3, 30);  // T1 满，淘汰最久未动的 1
+
+    auto records = recorder.take();
+    ASSERT_EQ(records.size(), 1u);
+    EXPECT_EQ(records[0].key, 1);
+    EXPECT_EQ(records[0].value, 10);
+    EXPECT_EQ(records[0].reason, LeaveReason::Evicted);
+    EXPECT_EQ(cache.size(), 2u);
+}
+
+// 阈值 1 使条目立即进入 T2：T2 满时按频次驱逐并通知 Evicted
+TEST(ArcCacheLeaveCallbackTest, LfuPartEvictionNotifiesEvicted) {
+    ArcCache<int, int> cache(4, 1);  // T2 目标容量 2
+    LeaveRecorder recorder(cache);
+    cache.put(1, 10);
+    cache.put(2, 20);
+    cache.put(3, 30);  // T2 满，淘汰频次最低且最旧的 1
+
+    auto records = recorder.take();
+    ASSERT_EQ(records.size(), 1u);
+    EXPECT_EQ(records[0].key, 1);
+    EXPECT_EQ(records[0].value, 10);
+    EXPECT_EQ(records[0].reason, LeaveReason::Evicted);
+}
+
+// remove 命中 T1：Explicit 通知携带被移除条目的 key/value
+TEST(ArcCacheLeaveCallbackTest, RemoveFromLruPartNotifiesExplicit) {
+    ArcCache<int, int> cache(4, 1000);
+    LeaveRecorder recorder(cache);
+    cache.put(1, 10);
+
+    cache.remove(1);
+
+    auto records = recorder.take();
+    ASSERT_EQ(records.size(), 1u);
+    EXPECT_EQ(records[0].key, 1);
+    EXPECT_EQ(records[0].value, 10);
+    EXPECT_EQ(records[0].reason, LeaveReason::Explicit);
+}
+
+// remove 命中 T2：同样记为 Explicit
+TEST(ArcCacheLeaveCallbackTest, RemoveFromLfuPartNotifiesExplicit) {
+    ArcCache<int, int> cache(4, 1);
+    LeaveRecorder recorder(cache);
+    cache.put(1, 10);  // 立即晋升到 T2
+
+    cache.remove(1);
+
+    auto records = recorder.take();
+    ASSERT_EQ(records.size(), 1u);
+    EXPECT_EQ(records[0].key, 1);
+    EXPECT_EQ(records[0].value, 10);
+    EXPECT_EQ(records[0].reason, LeaveReason::Explicit);
+}
+
+// remove 不存在的 key：不产生通知
+TEST(ArcCacheLeaveCallbackTest, RemoveNonexistentIsSilent) {
+    ArcCache<int, int> cache(4, 1000);
+    LeaveRecorder recorder(cache);
+    cache.put(1, 10);
+
+    cache.remove(99);
+
+    EXPECT_TRUE(recorder.take().empty());
+    EXPECT_EQ(cache.size(), 1u);
+}
+
+// 达到转换阈值时 T1 -> T2 的迁移只是条目在缓存内部换部分，
+// 对用户而言并未离开：不产生任何通知，且条目仍可命中
+TEST(ArcCacheLeaveCallbackTest, TransformBetweenPartsIsSilent) {
+    ArcCache<int, int> cache(4);  // 默认阈值 2
+    LeaveRecorder recorder(cache);
+    cache.put(1, 10);
+    cache.put(1, 11);  // 第二次访问达到阈值，迁移到 T2
+
+    EXPECT_TRUE(recorder.take().empty());
+
+    int value = 0;
+    ASSERT_TRUE(cache.get(1, value));  // 迁移后从 T2 命中
+    EXPECT_EQ(value, 11);
+    EXPECT_TRUE(recorder.take().empty());
+}
+
+// 命中幽灵缓存引发容量重划分：p 增大后 T2 目标容量收缩，
+// 被挤出的 T2 条目与先前 T1 驱逐的条目一并按顺序通知
+TEST(ArcCacheLeaveCallbackTest, GhostHitShrinksOppositePartAndNotifies) {
+    ArcCache<int, int> cache(4, 2);  // T1 / T2 目标容量均为 2
+    LeaveRecorder recorder(cache);
+
+    cache.put(1, 10);
+    cache.put(1, 10);  // 1 晋升到 T2
+    cache.put(2, 20);
+    cache.put(2, 20);  // 2 晋升到 T2，T2 满
+    cache.put(3, 30);
+    cache.put(4, 40);
+    cache.put(5, 50);  // T1 满，3 被驱逐并进入 B1
+
+    int value = 0;
+    EXPECT_FALSE(cache.get(3, value));  // 命中 B1 -> p 增大 -> T2 收缩，挤掉 1
+
+    auto records = recorder.take();
+    ASSERT_EQ(records.size(), 2u);
+    EXPECT_EQ(records[0].key, 3);  // 先因 T1 满被驱逐
+    EXPECT_EQ(records[0].value, 30);
+    EXPECT_EQ(records[0].reason, LeaveReason::Evicted);
+    EXPECT_EQ(records[1].key, 1);  // 后因 T2 收缩被挤出
+    EXPECT_EQ(records[1].value, 10);
+    EXPECT_EQ(records[1].reason, LeaveReason::Evicted);
+    EXPECT_EQ(cache.size(), 3u);
+}
+
+// remove 事件与驱逐事件的 reason 正确区分，且通知顺序与发生顺序一致
+TEST(ArcCacheLeaveCallbackTest, MixedRemoveAndEvictionReportCorrectReasons) {
+    ArcCache<int, int> cache(4, 1000);
+    LeaveRecorder recorder(cache);
+    cache.put(1, 10);
+    cache.put(2, 20);
+
+    cache.remove(1);  // Explicit
+    cache.put(3, 30);
+    cache.put(4, 40);  // T1 满，淘汰 2
+
+    auto records = recorder.take();
+    ASSERT_EQ(records.size(), 2u);
+    EXPECT_EQ(records[0].key, 1);
+    EXPECT_EQ(records[0].value, 10);
+    EXPECT_EQ(records[0].reason, LeaveReason::Explicit);
+    EXPECT_EQ(records[1].key, 2);
+    EXPECT_EQ(records[1].value, 20);
+    EXPECT_EQ(records[1].reason, LeaveReason::Evicted);
+}
+
+// 一次操作只分发本轮事件：淘汰产生的通知不会残留到后续操作
+TEST(ArcCacheLeaveCallbackTest, EventsDoNotLeakBetweenOperations) {
+    ArcCache<int, int> cache(4, 1000);
+    LeaveRecorder recorder(cache);
+    cache.put(1, 10);
+    cache.put(2, 20);
+    cache.put(3, 30);  // 淘汰 1
+
+    EXPECT_EQ(recorder.take().size(), 1u);
+
+    // 后续无关操作不应收到上轮残留事件
+    cache.put(4, 40);  // 淘汰 2
+    auto records = recorder.take();
+    ASSERT_EQ(records.size(), 1u);
+    EXPECT_EQ(records[0].key, 2);
+    EXPECT_EQ(records[0].value, 20);
+}
+
+// 回调内重入 put/get/size：事件在锁外分发，安全无死锁
+TEST(ArcCacheLeaveCallbackTest, ReentrantCallsInsideCallback) {
+    ArcCache<int, int> cache(4, 1000);
+    cache.put(1, 10);
+    cache.put(2, 20);
+
+    cache.setLeaveCallback([&cache](const int& key, const int&, LeaveReason) {
+        // 回调执行时数据结构已是最终状态，size 反映驱逐后的结果
+        EXPECT_EQ(cache.size(), 2u);
+        EXPECT_EQ(cache.get(key), 0);  // 已离开主缓存的 key 再也取不到
+    });
+    cache.put(3, 30);  // 淘汰 1，触发回调
+
+    // 回调确实执行过：换成记录器后走一次 Explicit 路径
+    LeaveRecorder recorder(cache);
+    cache.remove(2);
+    auto records = recorder.take();
+    ASSERT_EQ(records.size(), 1u);
+    EXPECT_EQ(records[0].key, 2);
+    EXPECT_EQ(records[0].reason, LeaveReason::Explicit);
+}
+
+// 字符串类型端到端：key/value 类型泛化
+TEST(ArcCacheLeaveCallbackTest, WorksWithStringKeyAndValue) {
+    ArcCache<std::string, std::string> cache(4, 1000);
+    std::vector<std::pair<std::string, LeaveReason>> records;
+    cache.setLeaveCallback([&records](const std::string& k, const std::string&, LeaveReason r) {
+        records.push_back({k, r});
+    });
+
+    cache.put("a", "alpha");
+    cache.put("b", "beta");
+    cache.remove("a");  // Explicit
+    cache.put("c", "gamma");
+    cache.put("d", "delta");  // T1 满，淘汰 b
+
+    ASSERT_EQ(records.size(), 2u);
+    EXPECT_EQ(records[0].first, "a");
+    EXPECT_EQ(records[0].second, LeaveReason::Explicit);
+    EXPECT_EQ(records[1].first, "b");
+    EXPECT_EQ(records[1].second, LeaveReason::Evicted);
+}
+
+// 并发 put/get 压力下回调事件一致：值恒为 key*10、reason 恒为 Evicted、容量不被突破
+TEST(ArcCacheLeaveCallbackTest, ConcurrentCallbackReportsConsistentEvents) {
+    constexpr int kCapacity = 32;
+    constexpr int kThreads = 8;
+    constexpr int kKeys = 128;
+    constexpr int kOpsPerThread = 1000;
+
+    ArcCache<int, int> cache(kCapacity);
+    std::vector<LeaveRecord> allRecords;
+    std::mutex recordsMutex;
+    cache.setLeaveCallback([&](const int& k, const int& v, LeaveReason r) {
+        std::lock_guard<std::mutex> lock(recordsMutex);
+        allRecords.push_back({k, v, r});
+    });
+
+    std::vector<std::thread> threads;
+    for (int t = 0; t < kThreads; ++t) {
+        threads.emplace_back([&cache, t] {
+            std::mt19937 rng(static_cast<unsigned>(t) * 7919u + 1u);
+            for (int i = 0; i < kOpsPerThread; ++i) {
+                int key = static_cast<int>(rng() % kKeys);
+                if (rng() % 2 == 0) {
+                    cache.put(key, key * 10);
+                } else {
+                    int value = 0;
+                    cache.get(key, value);
+                }
+            }
+        });
+    }
+    for (auto& thread : threads) {
+        thread.join();
+    }
+
+    // 所有线程对同一 key 只写 key*10：通知中的值必须一致，无撕裂值
+    for (const auto& r : allRecords) {
+        EXPECT_EQ(r.value, r.key * 10);
+        EXPECT_EQ(r.reason, LeaveReason::Evicted);
+    }
+    EXPECT_FALSE(allRecords.empty());
     EXPECT_LE(cache.size(), static_cast<size_t>(kCapacity));
 }
 

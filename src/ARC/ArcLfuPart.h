@@ -5,6 +5,7 @@
 #include <map>
 #include <memory>
 #include <unordered_map>
+#include <vector>
 
 #include "ARC/ArcNode.h"
 
@@ -22,13 +23,15 @@ class ArcLfuPart {
     // 由 ArcCache::applyPartitions 按自适应参数 p 统一设置
     ArcLfuPart() : capacity_(0), ghostCapacity_(0), minFreq_(0) { initializeLists(); }
 
-    void put(Key key, Value value) {
+    // 增加或更新缓存项
+    // 返回为腾出空间而驱逐的节点（已移入幽灵缓存，shared_ptr 仍有效）；无驱逐返回 nullptr
+    NodePtr put(Key key, Value value) {
         auto it = mainCache_.find(key);
         if (it != mainCache_.end()) {
             updateExistingNode(it->second, value);
-        } else {
-            addNewNode(key, value);
+            return nullptr;
         }
+        return addNewNode(key, value);
     }
 
     bool get(const Key& key, Value& value) {
@@ -42,9 +45,10 @@ class ArcLfuPart {
         return false;
     }
 
-    void remove(const Key& key) {
+    // 移除缓存项，返回被移除的节点；不存在则返回 nullptr
+    NodePtr remove(const Key& key) {
         auto it = mainCache_.find(key);
-        if (it == mainCache_.end()) return;
+        if (it == mainCache_.end()) return nullptr;
 
         auto node = it->second;
         size_t freq = node->getAccessCount();
@@ -62,6 +66,7 @@ class ArcLfuPart {
         }
 
         mainCache_.erase(it);
+        return node;
     }
 
     size_t size() const { return mainCache_.size(); }
@@ -70,10 +75,14 @@ class ArcLfuPart {
     bool contain(const Key& key) { return mainCache_.find(key) != mainCache_.end(); }
 
     // 设置主缓存目标容量（ARC 中 T2 的目标容量，即 总容量 - p）
-    // 缩容时按频次由低到高把溢出条目移入幽灵缓存
-    void setCapacity(size_t capacity) {
+    // 缩容时按频次由低到高把溢出条目移入幽灵缓存，并返回这些条目
+    std::vector<NodePtr> setCapacity(size_t capacity) {
         capacity_ = capacity;
-        while (mainCache_.size() > capacity_) evictLeastFreq();
+        std::vector<NodePtr> evicted;
+        while (mainCache_.size() > capacity_) {
+            if (auto node = evictLeastFreq()) evicted.push_back(node);
+        }
+        return evicted;
     }
 
     // 设置幽灵缓存容量（对应 ARC 不变量 |T2| + |B2| <= 总容量）
@@ -114,11 +123,13 @@ class ArcLfuPart {
         updateNodeFreq(node);
     }
 
-    void addNewNode(const Key& key, const Value& value) {
-        if (capacity_ == 0) return;  // 目标容量为 0：该部分暂不驻留条目
+    // 新增节点，返回为腾出空间而驱逐的节点；未发生驱逐或目标容量为 0 时返回 nullptr
+    NodePtr addNewNode(const Key& key, const Value& value) {
+        if (capacity_ == 0) return nullptr;  // 目标容量为 0：该部分暂不驻留条目
 
         // 如果主缓存容量已满，先驱逐最旧的节点
-        if (mainCache_.size() >= capacity_) evictLeastFreq();
+        NodePtr evicted = nullptr;
+        if (mainCache_.size() >= capacity_) evicted = evictLeastFreq();
 
         // 创建节点添加到链表中
         // 如果链表不存在要先创建
@@ -131,6 +142,7 @@ class ArcLfuPart {
 
         // 更新最小访问频次
         minFreq_ = 1;
+        return evicted;
     }
 
     // 更新节点访问频次，同时维护频率链表映射
@@ -161,10 +173,11 @@ class ArcLfuPart {
     }
 
     // 从主缓存驱逐最少使用频次的节点，并添加到幽灵缓存链表
-    void evictLeastFreq() {
+    // 返回被驱逐的节点；无可驱逐条目时返回 nullptr
+    NodePtr evictLeastFreq() {
         // 用 find 而非 operator[]，避免为不存在的频次插入空链表而污染 freqListMap_
         auto listIt = freqListMap_.find(minFreq_);
-        if (listIt == freqListMap_.end() || listIt->second.empty()) return;
+        if (listIt == freqListMap_.end() || listIt->second.empty()) return nullptr;
 
         // 移除最小访问频次链表的最后一个节点
         auto node = listIt->second.back();
@@ -183,6 +196,7 @@ class ArcLfuPart {
 
         // 添加到幽灵缓存链表（addToGhost 内部维护幽灵缓存容量上限）
         addToGhost(node);
+        return node;
     }
 
     /// Ghost Cache 操作
