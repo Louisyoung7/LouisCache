@@ -373,4 +373,42 @@ TEST(ShardedLruCacheLeaveCallbackTest, ConcurrentCallbackReportsConsistentEvents
     EXPECT_LE(cache.size(), static_cast<size_t>(kCapacity));
 }
 
+// ============ exists / capacity ============
+
+// exists 命中与未命中（默认哈希，key 落在不同分片）
+TEST(ShardedLruCacheTest, ExistsReportsPresence) {
+    ShardedLruCache<int, int> cache(8, 4);
+
+    EXPECT_FALSE(cache.exists(1));
+
+    cache.put(1, 10);
+    cache.put(2, 20);
+    EXPECT_TRUE(cache.exists(1));
+    EXPECT_TRUE(cache.exists(2));
+    EXPECT_FALSE(cache.exists(3));
+}
+
+// remove 与淘汰后 exists 变 false；恒等哈希下分片路由完全可控
+TEST(ShardedLruCacheTest, ExistsReflectsRemovalAndEviction) {
+    ShardedLruCache<int, int, IdentityHash> cache(2, 2);  // 每分片容量 1
+    cache.put(0, 10);                                     // 0 → 分片 0
+    cache.put(1, 20);                                     // 1 → 分片 1
+    EXPECT_TRUE(cache.exists(0));
+    EXPECT_TRUE(cache.exists(1));
+
+    cache.put(2, 22);  // 2 → 分片 0，挤掉已满的 0
+    EXPECT_FALSE(cache.exists(0));
+    EXPECT_TRUE(cache.exists(2));
+
+    cache.remove(2);
+    EXPECT_FALSE(cache.exists(2));
+    EXPECT_TRUE(cache.exists(1));
+}
+
+// capacity 返回构造时设定的总容量（各分片容量之和）
+TEST(ShardedLruCacheTest, CapacityReturnsConfiguredValue) {
+    ShardedLruCache<int, int> cache(10, 4);
+    EXPECT_EQ(cache.capacity(), 10u);
+}
+
 }  // namespace

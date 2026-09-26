@@ -28,12 +28,12 @@ class LruKCache : public Policy<Key, Value> {
         std::vector<LeaveEvent> toNotify;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            if (mainCache_.contains(key).has_value()) {  // 在主缓存中，更新主缓存
+            if (mainCache_.exists(key)) {  // 在主缓存中，更新主缓存
                 mainCache_.put(key, std::move(value));
                 return;
             }
             // 不在主缓存中：新值必须写进条目，否则历史里的旧值会覆盖本次 put
-            HistoryEntry entry = historyList_.contains(key).value_or(HistoryEntry{});
+            HistoryEntry entry = historyList_.peek(key).value_or(HistoryEntry{});
             entry.value = std::move(value);
             if (auto promoted = recordAccess(key, std::move(entry))) {
                 mainCache_.put(key, std::move(*promoted));
@@ -53,7 +53,7 @@ class LruKCache : public Policy<Key, Value> {
             std::lock_guard<std::mutex> lock(mutex_);
             if (mainCache_.get(key, value)) return true;
 
-            auto inHistory = historyList_.contains(key);
+            auto inHistory = historyList_.peek(key);
             if (!inHistory) return false;
             if (auto promoted = recordAccess(key, std::move(*inHistory))) {
                 mainCache_.put(key, std::move(*promoted));
@@ -94,6 +94,15 @@ class LruKCache : public Policy<Key, Value> {
         std::lock_guard<std::mutex> lock(mutex_);
         return mainCache_.size();
     }
+
+    // 查询是否存在（仅主缓存；历史队列中的条目尚未驻留缓存，不算存在）
+    bool exists(const Key& key) const override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return mainCache_.exists(key);
+    }
+
+    // 用户设定的容量（即主缓存容量）
+    size_t capacity() const override { return mainCache_.capacity(); }
 
    private:
     struct HistoryEntry {

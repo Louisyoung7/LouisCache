@@ -516,4 +516,65 @@ TEST(LruCacheLeaveCallbackTest, ZeroCapacityPutDoesNotNotify) {
     EXPECT_TRUE(recorder.take().empty());
 }
 
+// ============ exists / capacity / peek ============
+
+// exists 命中与未命中
+TEST(LruCacheTest, ExistsReportsPresence) {
+    LruCache<int, int> cache(2);
+    EXPECT_FALSE(cache.exists(1));
+
+    cache.put(1, 10);
+    EXPECT_TRUE(cache.exists(1));
+    EXPECT_FALSE(cache.exists(2));
+}
+
+// exists 是 peek 语义：不刷新 recency，不改变淘汰顺序
+TEST(LruCacheTest, ExistsDoesNotRefreshRecency) {
+    LruCache<int, int> cache(2);
+    cache.put(1, 10);
+    cache.put(2, 20);
+
+    EXPECT_TRUE(cache.exists(1));  // 若误刷新 recency，1 会取代 2 成为幸存者
+
+    cache.put(3, 30);  // 淘汰最久未使用的 1
+    EXPECT_FALSE(cache.exists(1));
+    EXPECT_TRUE(cache.exists(2));
+    EXPECT_TRUE(cache.exists(3));
+}
+
+// peek 返回条目值，但同样不刷新 recency
+TEST(LruCacheTest, PeekReturnsValueWithoutRefreshingRecency) {
+    LruCache<int, int> cache(2);
+    cache.put(1, 10);
+    cache.put(2, 20);
+
+    auto value = cache.peek(1);
+    ASSERT_TRUE(value.has_value());
+    EXPECT_EQ(*value, 10);
+    EXPECT_FALSE(cache.peek(99).has_value());
+
+    cache.put(3, 30);  // 淘汰 1（peek 未刷新 recency）
+    EXPECT_FALSE(cache.peek(1).has_value());
+    EXPECT_TRUE(cache.peek(2).has_value());
+}
+
+// capacity 返回构造时设定的容量，且不随 put 改变
+TEST(LruCacheTest, CapacityReturnsConfiguredValue) {
+    LruCache<int, int> cache(5);
+    EXPECT_EQ(cache.capacity(), 5u);
+
+    cache.put(1, 10);
+    EXPECT_EQ(cache.capacity(), 5u);
+}
+
+// 容量 0：条目不驻留，exists 恒为 false，capacity 为 0
+TEST(LruCacheTest, ZeroCapacityExistsAlwaysFalse) {
+    LruCache<int, int> cache(0);
+    cache.put(1, 10);  // 被丢弃
+
+    EXPECT_EQ(cache.size(), 0u);
+    EXPECT_FALSE(cache.exists(1));
+    EXPECT_EQ(cache.capacity(), 0u);
+}
+
 }  // namespace
