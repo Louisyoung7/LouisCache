@@ -125,6 +125,16 @@ class ArcCache : public Policy<Key, Value> {
         return lruPart_->size() + lfuPart_->size();
     }
 
+    // 查询是否存在（仅主缓存 T1+T2；幽灵缓存无值，不算存在）
+    // peek 语义：不触发幽灵缓存命中、不调整 p、不引发容量重划分
+    bool exists(const Key& key) const override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return lruPart_->contain(key) || lfuPart_->contain(key);
+    }
+
+    // 用户设定的总缓存容量（T1 + T2）
+    size_t capacity() const override { return capacity_; }
+
    private:
     // 一次公共方法调用中收集到的一条离开事件，锁内填充、锁外分发
     struct LeaveEvent {

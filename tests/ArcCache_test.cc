@@ -682,4 +682,108 @@ TEST(ArcCacheLeaveCallbackTest, ConcurrentCallbackReportsConsistentEvents) {
     EXPECT_LE(cache.size(), static_cast<size_t>(kCapacity));
 }
 
+// ============ exists / capacity ============
+
+// exists 命中与未命中：T1 与 T2 中的条目均算存在
+TEST(ArcCacheTest, ExistsReportsPresence) {
+    ArcCache<int, int> cache(4);  // 默认阈值 2
+    EXPECT_FALSE(cache.exists(1));
+
+    cache.put(1, 10);
+    EXPECT_TRUE(cache.exists(1));  // T1
+
+    cache.put(1, 11);  // 达到阈值，晋升 T2
+    EXPECT_TRUE(cache.exists(1));
+
+    cache.put(2, 20);
+    EXPECT_TRUE(cache.exists(2));
+    EXPECT_FALSE(cache.exists(99));
+}
+
+// exists 对幽灵缓存条目返回 false，且不消耗幽灵命中：
+// 若 exists 误触发幽灵命中，p 调整引发的容量重划分驱逐会提前发生在 exists 内部
+TEST(ArcCacheTest, ExistsIgnoresGhostCaches) {
+    ArcCache<int, int> cache(8);  // p=4：T1/T2/B1/B2 目标容量均为 4
+    LeaveRecorder recorder(cache);
+
+    // 构造：B2 = {1,2}，B1 = {7}，T2 = {3,4,5,6}，T1 = {8,9,10,11}
+    cache.put(1, 10);
+    cache.put(1, 11);  // 晋升 T2
+    cache.put(2, 20);
+    cache.put(2, 21);
+    cache.put(3, 30);
+    cache.put(3, 31);
+    cache.put(4, 40);
+    cache.put(4, 41);  // T2 {1,2,3,4}
+    cache.put(5, 50);
+    cache.put(5, 51);  // 挤掉 1 -> B2
+    cache.put(6, 60);
+    cache.put(6, 61);  // 挤掉 2 -> B2，T2 {3,4,5,6}
+    cache.put(7, 70);
+    cache.put(8, 80);
+    cache.put(9, 90);
+    cache.put(10, 100);
+    cache.put(11, 110);  // T1 满，挤掉 7 -> B1，T1 {8,9,10,11}
+
+    auto setup = recorder.take();
+    ASSERT_EQ(setup.size(), 3u);  // 1、2、7 被驱逐
+    EXPECT_EQ(setup[0].key, 1);
+    EXPECT_EQ(setup[1].key, 2);
+    EXPECT_EQ(setup[2].key, 7);
+
+    EXPECT_TRUE(cache.exists(3));   // T2
+    EXPECT_TRUE(cache.exists(11));  // T1
+    EXPECT_FALSE(cache.exists(7));  // 幽灵缓存不算存在
+    EXPECT_FALSE(cache.exists(99));
+
+    // 关键断言：exists 未消耗 7 的幽灵命中
+    // 之后 put(7) 命中 B1，p 增 2（δ1 = ceil(|B2|/|B1|) = 2），
+    // T2 目标容量 4 -> 2，挤出最久未用的 3、4
+    EXPECT_TRUE(recorder.take().empty());  // exists 本身不产生任何事件
+    cache.put(7, 71);
+    auto records = recorder.take();
+    ASSERT_EQ(records.size(), 2u);
+    EXPECT_EQ(records[0].key, 3);
+    EXPECT_EQ(records[0].reason, LeaveReason::Evicted);
+    EXPECT_EQ(records[1].key, 4);
+    EXPECT_EQ(records[1].reason, LeaveReason::Evicted);
+
+    cache.put(12, 120);  // T1 目标容量 6，尚有空间，无驱逐
+    EXPECT_TRUE(recorder.take().empty());
+
+    EXPECT_EQ(cache.size(), 8u);  // 恰为总容量
+
+    int value = 0;
+    ASSERT_TRUE(cache.get(5, value));  // T2 缩容后幸存
+    EXPECT_EQ(value, 51);
+    ASSERT_TRUE(cache.get(6, value));  // 另一个幸存者
+    EXPECT_EQ(value, 61);
+    EXPECT_FALSE(cache.get(3, value)
+    );  // T2 缩容牺牲者，已入幽灵缓存（会触发幽灵命中调整 p，故放后面）
+    EXPECT_FALSE(cache.get(4, value));
+
+    // 放最后：get(7) 会使其达到转换阈值迁入 T2，get(3)/get(4) 的幽灵命中也会调整 p
+    ASSERT_TRUE(cache.get(7, value));
+    EXPECT_EQ(value, 71);
+}
+
+// capacity 返回构造时设定的总容量，且不随 put 改变
+TEST(ArcCacheTest, CapacityReturnsConfiguredValue) {
+    ArcCache<int, int> cache(6);
+    EXPECT_EQ(cache.capacity(), 6u);
+
+    cache.put(1, 10);
+    EXPECT_EQ(cache.capacity(), 6u);
+}
+
+// 容量 0：条目不驻留，exists 恒为 false，capacity 为 0
+TEST(ArcCacheTest, ZeroCapacityExistsAlwaysFalse) {
+    ArcCache<int, int> cache(0);
+    cache.put(1, 10);  // 被丢弃
+
+    EXPECT_EQ(cache.size(), 0u);
+    EXPECT_FALSE(cache.exists(1));
+    EXPECT_EQ(cache.capacity(), 0u);
+}
+
 }  // namespace
