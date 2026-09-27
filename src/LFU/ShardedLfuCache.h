@@ -14,7 +14,7 @@ template <typename Key, typename Value, typename HashFunc = std::hash<Key>>
 class ShardedLfuCache : public Policy<Key, Value> {
    public:
     ShardedLfuCache(size_t capacity, int sliceNum = std::thread::hardware_concurrency())
-        : sliceNum_(sliceNum <= 0 ? 1 : sliceNum) {
+        : capacity_(capacity), sliceNum_(sliceNum <= 0 ? 1 : sliceNum) {
         // 分片数钳制：非正值归 1；不超过 capacity，避免容量 0 的死分片
         size_t num = sliceNum > 0 ? static_cast<size_t>(sliceNum) : 1;
         if (num > capacity) num = capacity > 0 ? capacity : 1;  // 分片数即 capacity
@@ -71,9 +71,16 @@ class ShardedLfuCache : public Policy<Key, Value> {
         return size;
     }
 
+    // 查询是否存在（key 经哈希只可能位于一个分片，直接查询对应分片）
+    bool exists(const Key& key) const override { return lfuSliceCaches_[hash(key)]->exists(key); }
+
+    // 用户设定的总容量（各分片容量之和）
+    size_t capacity() const override { return capacity_; }
+
    private:
     size_t hash(const Key& key) const { return hashFunc_(key) % sliceNum_; }
 
+    size_t capacity_;                                                    // 用户设定的总容量
     int sliceNum_;                                                       // 分片数量
     std::vector<std::unique_ptr<LfuCache<Key, Value>>> lfuSliceCaches_;  // 存储每一个LFU缓存分片
     HashFunc hashFunc_;                                                  // 哈希函数

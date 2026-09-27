@@ -86,9 +86,17 @@ class LruCache : public Policy<Key, Value> {
         return nodeMap_.size();
     }
 
-    // 查询缓存项是否存在
-    // 不触发淘汰策略
-    std::optional<Value> contains(const Key& key) {
+    // 查询是否存在（peek 语义：不刷新 recency、不触发淘汰）
+    bool exists(const Key& key) const override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return nodeMap_.find(key) != nodeMap_.end();
+    }
+
+    // 用户设定的容量
+    size_t capacity() const override { return capacity_ > 0 ? static_cast<size_t>(capacity_) : 0; }
+
+    // 查看缓存项的值（peek 语义：不刷新 recency、不触发淘汰）
+    std::optional<Value> peek(const Key& key) {
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = nodeMap_.find(key);
         if (it == nodeMap_.end()) return std::nullopt;

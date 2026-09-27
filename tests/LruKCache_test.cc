@@ -579,4 +579,43 @@ TEST(LruKCacheLeaveCallbackTest, ConcurrentCallbackReportsConsistentEvents) {
     EXPECT_LE(cache.size(), static_cast<size_t>(kMainCapacity));
 }
 
+// ============ exists / capacity ============
+
+// exists 仅反映主缓存；历史队列中的条目尚未驻留，不算存在
+TEST(LruKCacheTest, ExistsOnlyReflectsMainCache) {
+    LruKCache<int, int> cache(2, 4);
+
+    cache.put(1, 10);  // 访问 1 次，留在历史队列
+    EXPECT_FALSE(cache.exists(1));
+
+    cache.put(1, 11);  // 达到 k 次，晋升主缓存
+    EXPECT_TRUE(cache.exists(1));
+
+    EXPECT_FALSE(cache.exists(99));
+}
+
+// exists 是 peek 语义：不影响历史计数，不会让条目提前晋升
+TEST(LruKCacheTest, ExistsDoesNotAffectPromotion) {
+    LruKCache<int, int> cache(1, 4);
+
+    cache.put(1, 10);  // 访问 1 次，留在历史队列
+    EXPECT_FALSE(cache.exists(1));
+    EXPECT_FALSE(cache.exists(1));
+    EXPECT_FALSE(cache.exists(1));  // 多次查询不累计访问次数
+
+    cache.put(1, 11);  // 第 2 次 put 才晋升
+    EXPECT_TRUE(cache.exists(1));
+
+    cache.put(2, 20);
+    cache.put(2, 21);  // 晋升 2，挤掉 1
+    EXPECT_FALSE(cache.exists(1));
+    EXPECT_TRUE(cache.exists(2));
+}
+
+// capacity 返回主缓存容量（构造参数），与历史队列容量无关
+TEST(LruKCacheTest, CapacityReturnsMainCacheCapacity) {
+    LruKCache<int, int> cache(3, 8);
+    EXPECT_EQ(cache.capacity(), 3u);
+}
+
 }  // namespace
