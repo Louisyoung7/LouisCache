@@ -86,6 +86,15 @@ class LfuCache : public Policy<Key, Value> {
         return nodeMap_.size();
     }
 
+    // 查询是否存在（peek 语义：不提升访问频次、不触发淘汰）
+    bool exists(const Key& key) const override {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return nodeMap_.find(key) != nodeMap_.end();
+    }
+
+    // 用户设定的容量
+    size_t capacity() const override { return capacity_; }
+
    private:
     // 只负责添加缓存项，缓存已满时先淘汰，返回被淘汰的键值对
     std::optional<std::pair<Key, Value>> putInternal(Key key, Value value) {

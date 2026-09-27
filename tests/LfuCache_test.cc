@@ -580,4 +580,51 @@ TEST(LfuCacheLeaveCallbackTest, ZeroCapacityPutDoesNotNotify) {
     EXPECT_TRUE(recorder.take().empty());
 }
 
+// ============ exists / capacity ============
+
+// exists 命中与未命中
+TEST(LfuCacheTest, ExistsReportsPresence) {
+    LfuCache<int, int> cache(2);
+    EXPECT_FALSE(cache.exists(1));
+
+    cache.put(1, 10);
+    EXPECT_TRUE(cache.exists(1));
+    EXPECT_FALSE(cache.exists(2));
+}
+
+// exists 是 peek 语义：不提升访问频次，不改变淘汰选择
+TEST(LfuCacheTest, ExistsDoesNotRaiseFrequency) {
+    LfuCache<int, int> cache(3);
+    cache.put(1, 10);
+    cache.put(2, 20);
+    cache.put(3, 30);  // 同为频次 1，链表序（新→旧）：3,2,1
+
+    EXPECT_TRUE(cache.exists(1));  // 若误提升频次，2 会成为淘汰受害者
+
+    cache.put(4, 40);  // 淘汰频次 1 中最久未动的 1
+    EXPECT_FALSE(cache.exists(1));
+    EXPECT_TRUE(cache.exists(2));
+    EXPECT_TRUE(cache.exists(3));
+    EXPECT_TRUE(cache.exists(4));
+}
+
+// capacity 返回构造时设定的容量，且不随 put 改变
+TEST(LfuCacheTest, CapacityReturnsConfiguredValue) {
+    LfuCache<int, int> cache(5);
+    EXPECT_EQ(cache.capacity(), 5u);
+
+    cache.put(1, 10);
+    EXPECT_EQ(cache.capacity(), 5u);
+}
+
+// 容量 0：条目不驻留，exists 恒为 false，capacity 为 0
+TEST(LfuCacheTest, ZeroCapacityExistsAlwaysFalse) {
+    LfuCache<int, int> cache(0);
+    cache.put(1, 10);  // 被丢弃
+
+    EXPECT_EQ(cache.size(), 0u);
+    EXPECT_FALSE(cache.exists(1));
+    EXPECT_EQ(cache.capacity(), 0u);
+}
+
 }  // namespace
