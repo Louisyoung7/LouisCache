@@ -49,7 +49,7 @@ class TtlCache : public Policy<Key, Value> {
         for (auto& e : outward) this->notifyLeave(e.key, std::move(e.value), e.reason);
     }
 
-    bool get(Key key, Value& value) override {
+    bool get(const Key& key, Value& value) override {
         auto now = Clock::now();  // 记录当前时间
         std::vector<LeaveRecord> outward;
         std::unordered_map<Key, Value> expiredVictims;
@@ -137,6 +137,10 @@ class TtlCache : public Policy<Key, Value> {
         Key key;
         Value value;
         LeaveReason reason;
+
+        // C++17 不允许圆括号初始化聚合体（C++20 特性），
+        // emplace_back 需要构造函数才能就地构造
+        LeaveRecord(Key k, Value v, LeaveReason r) : key(std::move(k)), value(std::move(v)), reason(r) {}
     };
 
     // 检查 key 是否过期
@@ -144,7 +148,7 @@ class TtlCache : public Policy<Key, Value> {
     // 不在此处从 expiryMap_ 中移除，避免迭代器失效
     bool purgeKeyIfExpiredLocked(
         const Key& key, TimePoint now, std::unordered_map<Key, Value>& expiredVictims
-    ) {
+    ) const {
         std::lock_guard<std::mutex> lock(mutex_);
         if (expiryMap_.find(key) == expiryMap_.end()) return false;
         if (expiryMap_[key] > now) return false;
@@ -160,7 +164,7 @@ class TtlCache : public Policy<Key, Value> {
     }
 
     // 将所有过期键值对从 inner 缓存中移除
-    void purgeExpiredLocked(TimePoint now, std::unordered_map<Key, Value>& expiredVictims) {
+    void purgeExpiredLocked(TimePoint now, std::unordered_map<Key, Value>& expiredVictims) const {
         std::lock_guard<std::mutex> lock(mutex_);
         for (auto& [key, expiry] : expiryMap_) {
             if (expiry > now) continue;
@@ -170,7 +174,7 @@ class TtlCache : public Policy<Key, Value> {
     // 由于 expiredVictims 统一为局部数据，所以不为空一定要用此方法及时处理
     std::vector<LeaveRecord> drainAndClassifyLocked(
         TimePoint now, std::unordered_map<Key, Value>& expiredVictims
-    ) {
+    ) const {
         std::vector<LeaveRecord> outward;
         // 先处理 expiredVictims
 
@@ -203,9 +207,11 @@ class TtlCache : public Policy<Key, Value> {
 
     std::shared_ptr<Policy<Key, Value>> inner_;
     Duration ttl_;
-    std::unordered_map<Key, TimePoint> expiryMap_;  // 装饰器自持过期表
+    // size()/exists() 是 const 接口，但需在锁内 purge/drain，
+    // 故被它们修改的状态声明为 mutable（互斥锁仍是唯一保护手段）
+    mutable std::unordered_map<Key, TimePoint> expiryMap_;  // 装饰器自持过期表
     mutable std::mutex mutex_;
-    std::vector<LeaveRecord> pendingInnerLeaves_;  // inner 回调缓冲
-    std::mutex bufferMutex_;                       // 叶子锁
+    mutable std::vector<LeaveRecord> pendingInnerLeaves_;  // inner 回调缓冲
+    mutable std::mutex bufferMutex_;                       // 叶子锁
 };
 }  // namespace louis::cache
