@@ -53,11 +53,11 @@ class TtlCache : public Policy<Key, Value> {
         auto now = Clock::now();  // 记录当前时间
         std::vector<LeaveRecord> outward;
         std::unordered_map<Key, Value> expiredVictims;
-        // 尝试从 inner 缓存中清除单个过期项，可能缓冲需要处理的 Explicit 项
-        purgeKeyIfExpiredLocked(key, now, expiredVictims);
         bool isHit = false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
+            // 尝试从 inner 缓存中清除单个过期项，可能缓冲需要处理的 Explicit 项
+            purgeKeyIfExpiredLocked(key, now, expiredVictims);
             isHit = inner_->get(key, value);  // 可能缓冲 Evicted 项
             outward = drainAndClassifyLocked(now, expiredVictims);
         }
@@ -88,12 +88,12 @@ class TtlCache : public Policy<Key, Value> {
         auto now = Clock::now();  // 记录当前时间
         std::vector<LeaveRecord> outward;
         std::unordered_map<Key, Value> expiredVictims;
-        // 先清除所有过期项，所有的过期项都会缓冲需要处理的 Explicit 项
-        purgeExpiredLocked(now, expiredVictims);
-        // 再统计当前缓存项数量
         size_t size = 0;
         {
             std::lock_guard<std::mutex> lock(mutex_);
+            // 先清除所有过期项，所有的过期项都会缓冲需要处理的 Explicit 项
+            purgeExpiredLocked(now, expiredVictims);
+            // 再统计当前缓存项数量
             size = inner_->size();
             outward = drainAndClassifyLocked(now, expiredVictims);
         }
@@ -105,11 +105,11 @@ class TtlCache : public Policy<Key, Value> {
         auto now = Clock::now();  // 记录当前时间
         std::vector<LeaveRecord> outward;
         std::unordered_map<Key, Value> expiredVictims;
-        // 尝试从 inner 缓存中清除单个过期项，可能缓冲需要处理的 Explicit 项
-        purgeKeyIfExpiredLocked(key, now, expiredVictims);
         bool exists = false;
         {
             std::lock_guard<std::mutex> lock(mutex_);
+            // 尝试从 inner 缓存中清除单个过期项，可能缓冲需要处理的 Explicit 项
+            purgeKeyIfExpiredLocked(key, now, expiredVictims);
             exists = inner_->exists(key);
             outward = drainAndClassifyLocked(now, expiredVictims);
         }
@@ -149,7 +149,6 @@ class TtlCache : public Policy<Key, Value> {
     bool purgeKeyIfExpiredLocked(
         const Key& key, TimePoint now, std::unordered_map<Key, Value>& expiredVictims
     ) const {
-        std::lock_guard<std::mutex> lock(mutex_);
         if (expiryMap_.find(key) == expiryMap_.end()) return false;
         if (expiryMap_[key] > now) return false;
 
@@ -165,7 +164,6 @@ class TtlCache : public Policy<Key, Value> {
 
     // 将所有过期键值对从 inner 缓存中移除
     void purgeExpiredLocked(TimePoint now, std::unordered_map<Key, Value>& expiredVictims) const {
-        std::lock_guard<std::mutex> lock(mutex_);
         for (auto& [key, expiry] : expiryMap_) {
             if (expiry > now) continue;
             purgeKeyIfExpiredLocked(key, now, expiredVictims);
