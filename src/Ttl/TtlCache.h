@@ -123,13 +123,17 @@ class TtlCache : public Policy<Key, Value> {
     }
 
     size_t purgeExpired() {
-        size_t rawSize = 0;
+        auto now = Clock::now();  // 记录当前时间
+        std::vector<LeaveRecord> outward;
+        std::unordered_map<Key, Value> expiredVictims;
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            rawSize = inner_->size();
+            // 清除所有过期项，过期项的数量即为返回值
+            purgeExpiredLocked(now, expiredVictims);
+            outward = drainAndClassifyLocked(now, expiredVictims);
         }
-        size_t clearSize = size();
-        return rawSize - clearSize;
+        for (auto& e : outward) this->notifyLeave(e.key, std::move(e.value), e.reason);
+        return expiredVictims.size();
     }
 
    private:
@@ -174,32 +178,35 @@ class TtlCache : public Policy<Key, Value> {
         TimePoint now, std::unordered_map<Key, Value>& expiredVictims
     ) const {
         std::vector<LeaveRecord> outward;
-        // 先处理 expiredVictims
+        std::vector<LeaveRecord> pendingInnerLeaves;
 
+        // 先处理 expiredVictims
         for (auto& [key, value] : expiredVictims) {
-            outward.emplace_back(key, std::move(value), LeaveReason::Explicit);
+            outward.emplace_back(key, std::move(value), LeaveReason::Expired);
             expiryMap_.erase(key);
         }
         // 再消化 pendingInnerLeaves_
         {
             std::lock_guard<std::mutex> lock(bufferMutex_);
-
-            for (auto& [key, value, reason] : pendingInnerLeaves_) {
-                if (expiredVictims.find(key) != expiredVictims.end()) {
-                    // 阶段一已处理
-                    continue;
-                } else if (reason == LeaveReason::Explicit) {
-                    // 用户显式删除，即使条目恰好过期也报 Explicit
-                    outward.emplace_back(key, value, reason);
-                    expiryMap_.erase(key);
-                } else if (reason == LeaveReason::Evicted) {
-                    // 条目被驱逐，先检查是否过期
-                    bool zombie = expiryMap_.find(key) != expiryMap_.end() && expiryMap_[key] <= now;
-                    expiryMap_.erase(key);
-                    outward.emplace_back(key, value, zombie ? LeaveReason::Expired : reason);
-                }
+            // 先在锁内交换，清空的同时减少锁时间窗口
+            pendingInnerLeaves.swap(pendingInnerLeaves_);
+        }
+        for (auto& [key, value, reason] : pendingInnerLeaves) {
+            if (expiredVictims.find(key) != expiredVictims.end()) {
+                // 阶段一已处理
+                continue;
+            } else if (reason == LeaveReason::Explicit) {
+                // 用户显式删除，即使条目恰好过期也报 Explicit
+                outward.emplace_back(key, value, reason);
+                expiryMap_.erase(key);
+            } else if (reason == LeaveReason::Evicted) {
+                // 条目被驱逐，先检查是否过期
+                bool zombie = expiryMap_.find(key) != expiryMap_.end() && expiryMap_[key] <= now;
+                expiryMap_.erase(key);
+                outward.emplace_back(key, value, zombie ? LeaveReason::Expired : reason);
             }
         }
+
         return outward;
     }
 

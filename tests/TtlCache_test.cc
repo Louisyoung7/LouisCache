@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <mutex>
@@ -50,8 +51,9 @@ class ManualClock {
 using ManualTtlCache = TtlCache<int, int, ManualClock>;
 
 // 便捷构造：LRU inner + 指定 TTL
-std::shared_ptr<ManualTtlCache> makeTtl(std::shared_ptr<LruCache<int, int>> inner,
-                                        std::chrono::milliseconds ttl) {
+std::shared_ptr<ManualTtlCache> makeTtl(
+    std::shared_ptr<LruCache<int, int>> inner, std::chrono::milliseconds ttl
+) {
     return std::make_shared<ManualTtlCache>(std::move(inner), ttl);
 }
 
@@ -90,8 +92,7 @@ class LeaveRecorder {
 // TTL 内 get / exists 正常命中
 TEST(TtlCacheTest, PutGetHitWithinTtl) {
     ManualClock::reset();
-    auto cache = makeTtl(std::make_shared<LruCache<int, int>>(4),
-                         std::chrono::milliseconds(100));
+    auto cache = makeTtl(std::make_shared<LruCache<int, int>>(4), std::chrono::milliseconds(100));
 
     cache->put(1, 10);
     ManualClock::advance(std::chrono::milliseconds(50));
@@ -106,8 +107,7 @@ TEST(TtlCacheTest, PutGetHitWithinTtl) {
 // 过期后 get 返回 miss（两个重载），且不修改传出参数
 TEST(TtlCacheTest, GetReturnsMissAfterExpiry) {
     ManualClock::reset();
-    auto cache = makeTtl(std::make_shared<LruCache<int, int>>(4),
-                         std::chrono::milliseconds(100));
+    auto cache = makeTtl(std::make_shared<LruCache<int, int>>(4), std::chrono::milliseconds(100));
 
     cache->put(1, 10);
     ManualClock::advance(std::chrono::milliseconds(100));
@@ -121,8 +121,7 @@ TEST(TtlCacheTest, GetReturnsMissAfterExpiry) {
 // 过期后 exists 返回 false（peek 语义的硬约束）
 TEST(TtlCacheTest, ExistsReturnsFalseAfterExpiry) {
     ManualClock::reset();
-    auto cache = makeTtl(std::make_shared<LruCache<int, int>>(4),
-                         std::chrono::milliseconds(100));
+    auto cache = makeTtl(std::make_shared<LruCache<int, int>>(4), std::chrono::milliseconds(100));
 
     cache->put(1, 10);
     EXPECT_TRUE(cache->exists(1));
@@ -133,26 +132,24 @@ TEST(TtlCacheTest, ExistsReturnsFalseAfterExpiry) {
 // 固定过期：get 命中不续期
 TEST(TtlCacheTest, GetDoesNotRenewExpiry) {
     ManualClock::reset();
-    auto cache = makeTtl(std::make_shared<LruCache<int, int>>(4),
-                         std::chrono::milliseconds(100));
+    auto cache = makeTtl(std::make_shared<LruCache<int, int>>(4), std::chrono::milliseconds(100));
 
-    cache->put(1, 10);                 // expiry = 100
+    cache->put(1, 10);  // expiry = 100
     ManualClock::advance(std::chrono::milliseconds(60));
     int value = 0;
-    ASSERT_TRUE(cache->get(1, value));  // t=60 命中；若续期，expiry 会变成 160
+    ASSERT_TRUE(cache->get(1, value));                    // t=60 命中；若续期，expiry 会变成 160
     ManualClock::advance(std::chrono::milliseconds(60));  // t=120
-    EXPECT_FALSE(cache->get(1, value));  // 固定过期：120 >= 100 已过期
+    EXPECT_FALSE(cache->get(1, value));                   // 固定过期：120 >= 100 已过期
 }
 
 // 重新 put 会重置过期时间
 TEST(TtlCacheTest, PutRefreshesExpiry) {
     ManualClock::reset();
-    auto cache = makeTtl(std::make_shared<LruCache<int, int>>(4),
-                         std::chrono::milliseconds(100));
+    auto cache = makeTtl(std::make_shared<LruCache<int, int>>(4), std::chrono::milliseconds(100));
 
-    cache->put(1, 10);                 // expiry = 100
+    cache->put(1, 10);  // expiry = 100
     ManualClock::advance(std::chrono::milliseconds(80));
-    cache->put(1, 11);                 // 重新 put → expiry = 180
+    cache->put(1, 11);  // 重新 put → expiry = 180
 
     ManualClock::advance(std::chrono::milliseconds(90));  // t=170：未重置则已过期
     int value = 0;
@@ -168,8 +165,7 @@ TEST(TtlCacheTest, PutRefreshesExpiry) {
 // get 触发惰性过期，对外报 Expired 且携带正确 key/value
 TEST(TtlCacheLeaveCallbackTest, LazyExpiryNotifiesExpiredWithKeyValue) {
     ManualClock::reset();
-    auto cache = makeTtl(std::make_shared<LruCache<int, int>>(4),
-                         std::chrono::milliseconds(100));
+    auto cache = makeTtl(std::make_shared<LruCache<int, int>>(4), std::chrono::milliseconds(100));
     LeaveRecorder recorder(*cache);
 
     cache->put(1, 10);
@@ -188,8 +184,7 @@ TEST(TtlCacheLeaveCallbackTest, LazyExpiryNotifiesExpiredWithKeyValue) {
 // exists 同样触发惰性过期并报 Expired
 TEST(TtlCacheLeaveCallbackTest, ExistsAlsoPurgesAndNotifiesExpired) {
     ManualClock::reset();
-    auto cache = makeTtl(std::make_shared<LruCache<int, int>>(4),
-                         std::chrono::milliseconds(100));
+    auto cache = makeTtl(std::make_shared<LruCache<int, int>>(4), std::chrono::milliseconds(100));
     LeaveRecorder recorder(*cache);
 
     cache->put(1, 10);
@@ -207,8 +202,7 @@ TEST(TtlCacheLeaveCallbackTest, ExistsAlsoPurgesAndNotifiesExpired) {
 // purgeExpired 只清除过期项并返回清除数量
 TEST(TtlCacheTest, PurgeExpiredRemovesOnlyExpiredAndReturnsCount) {
     ManualClock::reset();
-    auto cache = makeTtl(std::make_shared<LruCache<int, int>>(8),
-                         std::chrono::milliseconds(100));
+    auto cache = makeTtl(std::make_shared<LruCache<int, int>>(8), std::chrono::milliseconds(100));
     LeaveRecorder recorder(*cache);
 
     cache->put(1, 10);
@@ -231,8 +225,7 @@ TEST(TtlCacheTest, PurgeExpiredRemovesOnlyExpiredAndReturnsCount) {
 // size() 先清除过期项再统计，过期项同时触发回调
 TEST(TtlCacheTest, SizePurgesExpiredFirst) {
     ManualClock::reset();
-    auto cache = makeTtl(std::make_shared<LruCache<int, int>>(8),
-                         std::chrono::milliseconds(100));
+    auto cache = makeTtl(std::make_shared<LruCache<int, int>>(8), std::chrono::milliseconds(100));
     LeaveRecorder recorder(*cache);
 
     cache->put(1, 10);
@@ -251,8 +244,7 @@ TEST(TtlCacheTest, SizePurgesExpiredFirst) {
 // 用户显式 remove（未过期）转发 Explicit
 TEST(TtlCacheLeaveCallbackTest, RemoveForwardsExplicit) {
     ManualClock::reset();
-    auto cache = makeTtl(std::make_shared<LruCache<int, int>>(4),
-                         std::chrono::milliseconds(100));
+    auto cache = makeTtl(std::make_shared<LruCache<int, int>>(4), std::chrono::milliseconds(100));
     LeaveRecorder recorder(*cache);
 
     cache->put(1, 10);
@@ -272,8 +264,7 @@ TEST(TtlCacheLeaveCallbackTest, RemoveForwardsExplicit) {
 // inner 容量淘汰原样转发 Evicted（条目未过期）
 TEST(TtlCacheLeaveCallbackTest, InnerEvictionForwardedAsEvicted) {
     ManualClock::reset();
-    auto cache = makeTtl(std::make_shared<LruCache<int, int>>(1),
-                         std::chrono::milliseconds(1000));
+    auto cache = makeTtl(std::make_shared<LruCache<int, int>>(1), std::chrono::milliseconds(1000));
     LeaveRecorder recorder(*cache);
 
     cache->put(1, 10);
@@ -290,14 +281,13 @@ TEST(TtlCacheLeaveCallbackTest, InnerEvictionForwardedAsEvicted) {
 // 僵尸条目（已过期未触碰）被 inner 容量挤出时，对外报 Expired 而非 Evicted
 TEST(TtlCacheLeaveCallbackTest, ZombieEvictionConvertedToExpired) {
     ManualClock::reset();
-    auto cache = makeTtl(std::make_shared<LruCache<int, int>>(2),
-                         std::chrono::milliseconds(100));
+    auto cache = makeTtl(std::make_shared<LruCache<int, int>>(2), std::chrono::milliseconds(100));
     LeaveRecorder recorder(*cache);
 
     cache->put(1, 10);
     cache->put(2, 20);
     ManualClock::advance(std::chrono::milliseconds(100));  // 1/2 均过期但未触碰
-    cache->put(3, 30);  // inner 挤出 LRU 条目 1 → zombie 转换
+    cache->put(3, 30);                                     // inner 挤出 LRU 条目 1 → zombie 转换
 
     auto records = recorder.take();
     ASSERT_EQ(records.size(), 1u);
@@ -309,8 +299,7 @@ TEST(TtlCacheLeaveCallbackTest, ZombieEvictionConvertedToExpired) {
 // inner 容量为 0：put 静默丢弃，无回调，expiryMap_ 不留残留
 TEST(TtlCacheLeaveCallbackTest, NoCallbackForCapacityZeroInner) {
     ManualClock::reset();
-    auto cache = makeTtl(std::make_shared<LruCache<int, int>>(0),
-                         std::chrono::milliseconds(100));
+    auto cache = makeTtl(std::make_shared<LruCache<int, int>>(0), std::chrono::milliseconds(100));
     LeaveRecorder recorder(*cache);
 
     cache->put(1, 10);
@@ -329,8 +318,8 @@ TEST(TtlCacheTest, ConcurrentSmokeWithSteadyClock) {
     constexpr int kOpsPerThread = 2000;
 
     auto cache = std::make_shared<TtlCache<int, int>>(
-        std::make_shared<LruCache<int, int>>(kCapacity),
-        std::chrono::milliseconds(50));
+        std::make_shared<LruCache<int, int>>(kCapacity), std::chrono::milliseconds(50)
+    );
 
     std::vector<std::thread> threads;
     for (int t = 0; t < kThreads; ++t) {
@@ -359,11 +348,57 @@ TEST(TtlCacheTest, ConcurrentSmokeWithSteadyClock) {
     EXPECT_LE(cache->size(), static_cast<size_t>(kCapacity));
 }
 
+// 复现 purgeExpired() 的非原子测量竞态。
+//
+// 不变式：TTL=1h，测试期间没有任何条目会过期，故每次 purgeExpired() 必须返回 0。
+// 旧实现用「purge 前后两次 size() 做差」跨两个加锁窗口采样，写/删线程落在两窗口
+// 缝隙里就会污染差值：
+//   - 缝隙中 put  ⇒ clearSize > rawSize ⇒ size_t 下溢返回天文数字
+//   - 缝隙中 remove/驱逐 ⇒ clearSize < rawSize ⇒ 无中生有的正数
+// 注意：概率性复现，修复前偶发通过属正常，可多跑几轮；修复后应稳定通过。
+TEST(TtlCacheTest, PurgeExpiredCountIsZeroWhenNothingExpired) {
+    constexpr int kKeySpace = 512;
+    auto cache = std::make_shared<TtlCache<int, int>>(
+        std::make_shared<LruCache<int, int>>(1024), std::chrono::hours(1)
+    );
+
+    std::atomic<bool> stop{false};
+    std::vector<std::thread> threads;
+    // 2 写 2 删：让 inner 的 size 在随机游走中持续变化，扩大两窗口采样不一致的机会
+    for (int t = 0; t < 4; ++t) {
+        threads.emplace_back([cache, t, &stop] {
+            std::mt19937 rng(static_cast<unsigned>(t) * 7919u + 1u);
+            while (!stop.load(std::memory_order_relaxed)) {
+                const int key = static_cast<int>(rng() % kKeySpace);
+                if (t < 2) {
+                    cache->put(key, key);
+                } else {
+                    cache->remove(key);
+                }
+            }
+        });
+    }
+
+    bool violated = false;
+    size_t badValue = 0;
+    for (int i = 0; i < 3000 && !violated; ++i) {
+        badValue = cache->purgeExpired();
+        violated = badValue != 0;
+    }
+
+    stop.store(true);
+    for (auto& thread : threads) {
+        thread.join();
+    }
+
+    ASSERT_FALSE(violated) << "无过期条目时 purgeExpired() 返回 " << badValue
+                           << "（期望恒为 0）——非原子测量竞态";
+}
+
 // 已过期但未触碰的条目，用户显式 remove 仍报 Explicit（固化分类决策）
 TEST(TtlCacheLeaveCallbackTest, RemoveExpiredKeyReportsExplicit) {
     ManualClock::reset();
-    auto cache = makeTtl(std::make_shared<LruCache<int, int>>(4),
-                         std::chrono::milliseconds(100));
+    auto cache = makeTtl(std::make_shared<LruCache<int, int>>(4), std::chrono::milliseconds(100));
     LeaveRecorder recorder(*cache);
 
     cache->put(1, 10);
@@ -379,8 +414,7 @@ TEST(TtlCacheLeaveCallbackTest, RemoveExpiredKeyReportsExplicit) {
 // 构造时 inner 为 null 抛 invalid_argument
 TEST(TtlCacheTest, NullInnerThrowsInvalidArgument) {
     std::shared_ptr<Policy<int, int>> nullInner;
-    EXPECT_THROW((ManualTtlCache(nullInner, std::chrono::milliseconds(100))),
-                 std::invalid_argument);
+    EXPECT_THROW((ManualTtlCache(nullInner, std::chrono::milliseconds(100))), std::invalid_argument);
 }
 
 }  // namespace
