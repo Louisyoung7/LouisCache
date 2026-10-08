@@ -16,3 +16,5 @@ CMakeCache.txt
 CMakeFiles/
 cmake-build-*/
 *.cmake
+.trae/
+.vscode/

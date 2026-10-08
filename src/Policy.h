@@ -7,8 +7,7 @@ enum class LeaveReason { Evicted, Explicit, Expired };
 template <typename Key, typename Value>
 class Policy {
    public:
-    using LeaveCallback =
-        std::function<void(const Key& key, const Value& value, LeaveReason reason)>;
+    using LeaveCallback = std::function<void(const Key& key, const Value& value, LeaveReason reason)>;
     // 虚析构
     virtual ~Policy() = default;
 
@@ -38,8 +37,8 @@ class Policy {
     virtual size_t capacity() const = 0;
 
    protected:
-    // 通知缓存项移除回调
-    void notifyLeave(const Key& k, const Value& v, LeaveReason r) {
+    // 通知缓存项移除回调（const：通知只读取回调，不修改缓存状态）
+    void notifyLeave(const Key& k, const Value& v, LeaveReason r) const {
         if (leaveCallback_) leaveCallback_(k, v, r);
     }
 
