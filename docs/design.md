@@ -2,6 +2,7 @@
 
 > 本文档回答三个问题：**做什么**（目标与边界）、**怎么做**（架构与关键决策）、**下一步做什么**（分阶段任务清单与验收标准）。
 > 进度基线：**阶段 0（地基）已完成**，详见 [当前基线](design/01-baseline.md)。
+> **AI 零基础？** 先读 [概念入门](design/00-primer.md) 再看正文。
 
 *文档版本：v0.1　|　最近更新：2026-10-14　|　文档角色：总览 + 索引根（各子卷内容范围见 [文档索引](#文档索引)）*
 
@@ -33,6 +34,7 @@ LouisCache 目前是**纯头文件 C++17 缓存库**，只做**精确匹配**的
 
 | 文件 | 内容范围 | 适用场景 | 关联关系 |
 |---|---|---|---|
+| [design/00-primer.md](design/00-primer.md) | 9 张 AI 概念卡（Embedding、向量相似度、ANN、阈值、benchmark 等），每张含「这是什么 / 项目角色 / 关联决策」 | **零基础读者的第一站**；查阅正文中任何 AI 术语 | 独立卷，被全部子卷回链 |
 | [design/01-baseline.md](design/01-baseline.md) | 阶段 0 基线：能力清单、三条可依赖语义、遗留缺口 | 了解地基现状、评估语义层可依赖的前提 | 地基，无上游；被 [02-architecture](design/02-architecture.md)、[03-design-decisions](design/03-design-decisions.md)、[04-roadmap](design/04-roadmap.md) 引用 |
 | [design/02-architecture.md](design/02-architecture.md) | 总体架构图、get / put 数据流、模块自研分界、分层职责 | 理解模块划分与端到端流程 | 依赖 [01-baseline](design/01-baseline.md)；流程取舍由 [03-design-decisions](design/03-design-decisions.md) 展开 |
 | [design/03-design-decisions.md](design/03-design-decisions.md) | 7 条关键设计决策（一致性枢纽、键选型、写入顺序、锁序、阈值、度量口径、零依赖） | 评审 / 实现前确认关键取舍；§4.1、§4.3 被架构与路线图引用 | 承接 [02-architecture](design/02-architecture.md)；约束 [04-roadmap](design/04-roadmap.md) 落地 |
@@ -66,6 +68,7 @@ LouisCache 目前是**纯头文件 C++17 缓存库**，只做**精确匹配**的
 2. **主文档不承载细节**：主文档只保留「项目定位」与索引；架构、决策、路线图等细节改动一律落到对应子卷。
 3. **引用统一用相对路径 + 锚点**：跨子卷与外部引用统一写作 `design/<file>.md#<anchor>`，保证链接可追溯。
 4. **版本标识一致**：各子卷版本号与主文档同步；任一子卷实质变更时，同步更新其顶部「最近更新」。
+5. **教学内容独立成卷**：面向零基础的 AI 概念讲解统一放入 [design/00-primer.md](design/00-primer.md)；正文只在术语首现处留一行指引，不在正文展开。
 
 ---
 

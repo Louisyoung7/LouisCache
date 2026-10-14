@@ -36,6 +36,8 @@ store_.setLeaveCallback([this](const uint64_t& id, const Entry& e, LeaveReason r
 
 **放弃的方案**：不做 `ExactIndex`、全部走 embedding + 向量搜索（阈值取 1.0 时精确命中也会被判为语义命中）。省一个 map，但每次精确命中都要付 embedding 开销——与"第 0 步免 embedding"的设计目标冲突。
 
+> 💡 什么是 embedding、「第 0 步」如何免掉它？见 [概念入门 §1](00-primer.md#1-embedding文本向量化)。
+
 ## 4.3 写入顺序：先存储、后索引
 
 **决策**：`put` 必须先 `EntryStore.put`（可能驱逐、回调清索引），再 `VectorIndex.add` + `ExactIndex` 写。
@@ -56,9 +58,13 @@ store_.setLeaveCallback([this](const uint64_t& id, const Entry& e, LeaveReason r
 
 `hitThreshold` 不是"越接近 1 越好"的常量，而是**精确率 / 召回率曲线的操作点**：调高→精确但漏命中多，调低→命中多但可能返回不相关回复。阶段 1 先用可配置常量打通链路，阶段 3 用数据集把这条曲线测出来。`CacheStats` 与 `Options` 从第一天就要有，否则阈值无从调优。
 
+> 💡 精确率 / 召回率是什么？见 [概念入门 §7](00-primer.md#7-阈值与精确率--召回率)。
+
 ## 4.6 `distance → similarity` 转换挡在适配层
 
 hnswlib 与 BruteForce 内部用距离（越小越近），语义层用相似度（越大越相似）。方向转换与归一化口径**只在 `VectorIndex` 适配层内做一次**，不泄漏到阈值判定逻辑，避免两套口径混用导致的阈值失灵。
+
+> 💡 相似度与距离为何方向相反？见 [概念入门 §2](00-primer.md#2-向量相似度与距离方向)。
 
 ## 4.7 零依赖原则与可选开关
 

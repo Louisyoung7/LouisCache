@@ -127,6 +127,8 @@ class SemanticCache {
 - [ ] `Options` 支持 namespace / 多实例路由
 - [ ] `HitVerifier` 接口位（`Noop` 占位，为将来"命中后再校验"留口）
 
+> 💡 本阶段涉及的 embedding 模型生态、归一化 / 维度、ANN、modelId 等术语，见 [概念入门 §3–§6](00-primer.md)。
+
 **验收标准**：
 
 - [ ] 真实模型下语义命中率显著优于 `HashEmbedder`，且延迟分解（编码 / 搜索 / 存储）可测
@@ -146,6 +148,8 @@ class SemanticCache {
 - [ ] 延迟与内存 benchmark：暴力索引 vs HNSW 对比；embedding 延迟分解
 - [ ] **语义感知淘汰策略**：优先淘汰向量空间中"冗余"的点、保留覆盖面大的点——研究向护城河，需先定义"冗余"的度量
 - [ ] `server/` 服务化 wrapper（gRPC / HTTP sidecar 形态，**不进核心库**）+ 使用文档
+
+> 💡 LCQMC / ATEC 是什么？见 [概念入门 §9](00-primer.md#9-benchmark-数据集lcqmc--atec)。
 
 **验收标准**：
 
