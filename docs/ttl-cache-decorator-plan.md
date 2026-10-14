@@ -2,7 +2,7 @@
 
 ## Context
 
-LouisCache 阶段 1（语义缓存 MVP）的第一个交付物。`LeaveReason::Expired` 目前无生产者，语义层"TTL 过期后清理索引"的一致性保证（design.md §4.1）依赖它先存在。TtlCache 只依赖 `Policy` 接口，零依赖可独立测试，完成后 `SemanticCache` 直接组合 `TtlCache<Policy<uint64_t, Entry>>` 作为 EntryStore。
+LouisCache 阶段 1（语义缓存 MVP）的第一个交付物。`LeaveReason::Expired` 目前无生产者，语义层"TTL 过期后清理索引"的一致性保证（[design/03-design-decisions.md §4.1](design/03-design-decisions.md#41-一致性枢纽leavecallback-是唯一清理出口)）依赖它先存在。TtlCache 只依赖 `Policy` 接口，零依赖可独立测试，完成后 `SemanticCache` 直接组合 `TtlCache<Policy<uint64_t, Entry>>` 作为 EntryStore。
 
 **已确认的设计决策**（用户拍板）：
 1. 全局统一 TTL（构造时传入，所有条目共享）
