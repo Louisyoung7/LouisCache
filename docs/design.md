@@ -72,4 +72,4 @@ LouisCache 目前是**纯头文件 C++17 缓存库**，只做**精确匹配**的
 
 ---
 
-**关联文档**：[TtlCache 装饰器实现计划](ttl-cache-decorator-plan.md) · [为什么 ShardedLruCache 禁止拷贝和移动](为什么ShardedLruCache禁止拷贝和移动.md)
+**关联文档**：[TtlCache 装饰器实现计划](ttl-cache-decorator-plan.md) · [为什么 ShardedLruCache 禁止拷贝和移动](为什么ShardedLruCache禁止拷贝和移动.md) · [HashEmbedder 实现与算法详解](HashEmbedder实现与算法详解.md)

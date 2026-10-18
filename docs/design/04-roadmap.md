@@ -1,6 +1,6 @@
 # 分阶段任务清单
 
-> **分卷**：第 5 卷「分阶段任务清单」　|　**文档版本**：v0.1　|　**最近更新**：2026-10-14　|　**对应原文档**：第五节（§5）　|　**关联**：[关键设计决策](03-design-decisions.md) · [贯穿性原则](05-principles.md)
+> **分卷**：第 5 卷「分阶段任务清单」　|　**文档版本**：v0.1　|　**最近更新**：2026-10-18　|　**对应原文档**：第五节（§5）　|　**关联**：[关键设计决策](03-design-decisions.md) · [贯穿性原则](05-principles.md)
 
 ---
 
@@ -16,7 +16,7 @@
 
 **交付物（文件级）**：
 
-- [ ] `src/Semantic/Embedder.h`：`Embedder` 接口 + `HashEmbedder`（确定性、可复现，仅供测试）
+- [x] `src/Semantic/Embedder.h`：`Embedder` 接口 + `HashEmbedder`（确定性、可复现，仅供测试）——**已实现**：默认 `dim = 128`、`ngram = 2`，`modelId()` 形如 `hash-embedder:v1:fnv1a64:ngram=2:dim=128`（实现与算法见 [HashEmbedder 实现与算法详解](../HashEmbedder实现与算法详解.md)）
 - [ ] `src/Semantic/VectorIndex.h`：`VectorIndex` 接口 + `BruteForceIndex`（内部维护 `id → vector`，支持 `remove`）
 - [ ] `src/Semantic/ExactIndex.h`：`prompt → id` 精确索引（若足够薄，可内联进 `SemanticCache`）
 - [ ] `src/Semantic/SemanticCache.h`：编排层，见下方接口草案
@@ -27,7 +27,7 @@
 **接口草案**（具体签名以实现时为准）：
 
 ```cpp
-// ---- Embedder.h ----
+// ---- Embedder.h ----（已实现，声明于命名空间 louis::cache）
 class Embedder {
  public:
   virtual ~Embedder() = default;
@@ -35,6 +35,15 @@ class Embedder {
   virtual size_t dim() const = 0;
   // 模型指纹：向量空间标识。持久化索引加载时校验，不同指纹不可比较
   virtual std::string modelId() const = 0;
+};
+
+// 测试替身：确定性字节 n-gram 特征哈希 + L2 归一化，不代表语义质量
+class HashEmbedder : public Embedder {
+ public:
+  explicit HashEmbedder(size_t dim = 128, size_t ngram = 2);
+  std::vector<float> embed(const std::string& text) const override;
+  size_t dim() const override;
+  std::string modelId() const override;  // "hash-embedder:v1:fnv1a64:ngram=2:dim=128"
 };
 
 // ---- VectorIndex.h ----
@@ -104,6 +113,7 @@ class SemanticCache {
 
 - [ ] 精确命中路径**不调用** `Embedder::embed`（用计数型 mock embedder 断言调用次数为 0）
 - [ ] 语义命中路径：query 与已存 prompt 相似度 ≥ 阈值即命中，并在 `GetResult` 中回传 `score`
+  - 样本需配合 `HashEmbedder` 默认参数选取：默认 `ngram = 2` 下，短句（6–7 字，差 1 字）余弦 ≈ 0.87、长句（21–22 字，差 1 字）≈ 0.98、无关句 ≈ 0.00；默认阈值 `0.85` 在过短样本上余量有限，参考数值见 [HashEmbedder 实现与算法详解 §5.1](../HashEmbedder实现与算法详解.md)
 - [ ] **无幽灵命中**：容量淘汰 / `remove` / TTL 过期后，同义 query 不再命中该条目（逐路径写用例）
 - [ ] **无漏清理**：`vectorIndex_->size()` 与 `store_.size()` 在任意操作序列后保持相等
 - [ ] 并发 `put` / `get` 下不崩、索引与存储不脱节（沿用阶段 0 的多线程测试写法）

@@ -43,7 +43,7 @@
 
 | 模块 | 现成方案 | 自研部分 |
 |---|---|---|
-| Embedding | ONNX Runtime + tokenizers-cpp，或 llama.cpp（GGUF，bge-small-zh-v1.5 / bge-m3） | 几十行 pooling + L2 归一化适配；`HashEmbedder` 测试件；`modelId()` 指纹 |
+| Embedding | ONNX Runtime + tokenizers-cpp，或 llama.cpp（GGUF，bge-small-zh-v1.5 / bge-m3） | 几十行 pooling + L2 归一化适配；`HashEmbedder` 测试件（确定性字节 n-gram 特征哈希，[实现与算法](../HashEmbedder实现与算法详解.md)）；`modelId()` 指纹 |
 | 向量索引 | hnswlib（头文件库，FetchContent） | 接口抽象 + `distance → similarity` 方向转换（挡在适配层内） |
 | 命中判定 | —— | 阈值判定、歧义策略——**这就是策略层** |
 | 淘汰 | 现有库 + `TtlCache` 装饰器 | 语义感知淘汰（阶段 3 差异化方向） |
