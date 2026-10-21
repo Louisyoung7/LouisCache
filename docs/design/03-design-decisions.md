@@ -1,6 +1,6 @@
 # 关键设计决策
 
-> **分卷**：第 4 卷「关键设计决策」　|　**文档版本**：v0.1　|　**最近更新**：2026-10-14　|　**对应原文档**：第四节（§4）　|　**关联**：[总体架构](02-architecture.md) · [分阶段任务清单](04-roadmap.md)
+> **分卷**：第 4 卷「关键设计决策」　|　**文档版本**：v0.1　|　**最近更新**：2026-10-19　|　**对应原文档**：第四节（§4）　|　**关联**：[总体架构](02-architecture.md) · [分阶段任务清单](04-roadmap.md)
 
 ---
 
@@ -68,7 +68,36 @@ hnswlib 与 BruteForce 内部用距离（越小越近），语义层用相似度
 
 ## 4.7 零依赖原则与可选开关
 
-核心库保持**零重依赖**：`HashEmbedder` + `BruteForceIndex` 足以跑通全部编排逻辑。重依赖（ONNX Runtime、hnswlib）全部做成 CMake 可选开关（如 `LOUISCACHE_WITH_ONNX`、`LOUISCACHE_WITH_HNSW`），默认关闭。好处是：测试在无 GPU、无模型、无网络的环境下也能全绿。
+**决策**：核心库保持**零重依赖**：`HashEmbedder` + `BruteForceIndex` 足以跑通全部编排逻辑。重依赖（ONNX Runtime、hnswlib）全部做成 CMake 可选开关（如 `LOUISCACHE_WITH_ONNX`、`LOUISCACHE_WITH_HNSW`），默认关闭。好处是：测试在无 GPU、无模型、无网络的环境下也能全绿。
+
+## 4.8 存储 / 向量索引可外部化，清理边界与决策留在进程内
+
+**问题**：`VectorIndex` 既然只是「id → 向量」的索引，能否交给 PostgreSQL（pgvector）或其他中间件，而不在进程内自持？
+
+**决策**：接口层面**允许外置**——`VectorIndex`（乃至 `EntryStore`）可被外部中间件（pgvector / Milvus / Qdrant / Redis-VSS 等）实现。但三条**必须留在进程内**：①「唯一清理出口」的**同步语义**；②淘汰策略；③命中判定。
+
+**为什么可换**：`VectorIndex` 是纯抽象（`add` / `remove` / `search` / `size`，见 [§3.5.3](02-architecture.md#353-vectorindex--bruteforceindex--草案)），依赖倒置使后端可替换，本就是设计目标的一部分（见 [§4.7](#47-零依赖原则与可选开关)）。
+
+**换的代价（必须一并处理的约束）**：
+
+- **同步清理变异步**：§4.1 / §4.3 靠「回调在本进程同步执行」来杜绝幽灵命中。远程 `remove` 一经网络化——同步则阻塞 `get` / `put` 且要处理失败；异步则**重新打开「索引搜到、存储已删」窗口**。需 outbox / 幂等删除，或让搜索容忍 tombstone。
+- **`id` 归属**：`id` 现由进程内分配；多实例共享一个库时须改为全局唯一 id / namespace（对应阶段 2 的多实例路由）。
+- **向量空间隔离**：共享库会混入多个模型的向量，须按 `modelId` 分区，否则相似度无意义。
+- **延迟与故障面**：进程内 ANN 为 μs 级，外部库每次命中多一次网络往返；且把「缓存」变成新的可用性依赖，与 §4.7 的零依赖基调冲突。故外部后端只应作为 `server/` 侧可选适配器。
+
+**不要只搬一半**：`EntryStore` 与 `VectorIndex` 同进程、经 `LeaveCallback` 强绑（见 [§4.1](#41-一致性枢纽leavecallback-是唯一清理出口)）。若只外置向量、`response` 留在内存，就退化为「双存储、无共享事务」的分布式一致性问题。合理做法是把**向量与回复一起**放入同一存储（pgvector：`vector` 列 + `response` 列），让删除 / 淘汰在存储侧事务化——此时进程内 `EntryStore` 与外部后端**二选一**。
+
+**为什么 Redis / Memcached 不适合替换 `EntryStore`**：`EntryStore` 是「存储 + 淘汰策略」的混合体——存储是轮子，淘汰策略是护城河（见 [主文档 §1.3](../design.md#13-使用者与边界)）。用它替换会同时丢掉两者中不该丢的那半：
+
+| 职责 | 现实现 | Redis / Memcached |
+|---|---|---|
+| KV 存储 | 进程内 hash map | ✅ 可替换 |
+| 淘汰回调（唯一清理出口） | `LeaveCallback` **同步**通知（[§4.1](#41-一致性枢纽leavecallback-是唯一清理出口)） | ❌ 淘汰在服务端 `maxmemory-policy` **静默**进行，客户端无逐 key 同步回调 |
+| 淘汰策略 | 自研 LRU / LRU-K / LFU / ARC + 分片 | ⚠️ 仅近似 LRU / LFU / random / TTL，无 LRU-K / ARC / 分片，亦不可扩展为语义感知淘汰 |
+
+Redis 的 `keyspace notifications`（`expired` / `evicted` 事件）是**异步、可能丢失、不保证投递**的 pub/sub，不能当作可靠清理出口；Memcached 更是纯 KV、无持久化、连通知都没有——两者都会**重新打开幽灵命中窗口**。此外 [§4.4](#44-锁序持有语义层锁时不得调用-entrystore) 依赖「`put` + 回调清理」为单进程原子序列，跨进程后退化为分布式事务；`TtlCache` 的 `Expired` 回调同样只能得到 best-effort 通知。若坚持外置 `EntryStore`，存储可外置（如 RedisJSON 存 `Entry`），但淘汰策略应留在进程内，且一致性模型须从「同进程同步清理」降级为「**最终一致 + 对账**」（outbox / 定期比对索引与存储，或把向量一并搬入 Redis-VSS 用服务端策略 + 对账）。
+
+**结论**：可换的是「轮子」（存储 + ANN），不可换的是「护城河」（淘汰决策 + 命中判定，见 [主文档 §1.3](../design.md#13-使用者与边界)）。`EntryStore` 正是最典型的混合体：它的存储可外置，但它承载的**淘汰策略与清理回调不应外置**。换外部后端的前提是把清理边界也一并挪到存储侧并事务化。
 
 ---
 

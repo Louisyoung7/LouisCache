@@ -36,9 +36,9 @@ LouisCache 目前是**纯头文件 C++17 缓存库**，只做**精确匹配**的
 |---|---|---|---|
 | [design/00-primer.md](design/00-primer.md) | 9 张 AI 概念卡（Embedding、向量相似度、ANN、阈值、benchmark 等），每张含「这是什么 / 项目角色 / 关联决策」 | **零基础读者的第一站**；查阅正文中任何 AI 术语 | 独立卷，被全部子卷回链 |
 | [design/01-baseline.md](design/01-baseline.md) | 阶段 0 基线：能力清单、三条可依赖语义、遗留缺口 | 了解地基现状、评估语义层可依赖的前提 | 地基，无上游；被 [02-architecture](design/02-architecture.md)、[03-design-decisions](design/03-design-decisions.md)、[04-roadmap](design/04-roadmap.md) 引用 |
-| [design/02-architecture.md](design/02-architecture.md) | 总体架构图、get / put 数据流、模块自研分界、分层职责 | 理解模块划分与端到端流程 | 依赖 [01-baseline](design/01-baseline.md)；流程取舍由 [03-design-decisions](design/03-design-decisions.md) 展开 |
-| [design/03-design-decisions.md](design/03-design-decisions.md) | 7 条关键设计决策（一致性枢纽、键选型、写入顺序、锁序、阈值、度量口径、零依赖） | 评审 / 实现前确认关键取舍；§4.1、§4.3 被架构与路线图引用 | 承接 [02-architecture](design/02-architecture.md)；约束 [04-roadmap](design/04-roadmap.md) 落地 |
-| [design/04-roadmap.md](design/04-roadmap.md) | 阶段 0–3 的目标、文件级交付物、接口草案、验收标准 | 排期与验收；逐阶段落地 | 引用 [01-baseline](design/01-baseline.md)；受 [03-design-decisions](design/03-design-decisions.md) 约束 |
+| [design/02-architecture.md](design/02-architecture.md) | 总体架构图、get / put 数据流、模块自研分界、分层职责、关键类职责与接口 | 理解模块划分、端到端流程与各类接口 | 依赖 [01-baseline](design/01-baseline.md)；流程取舍由 [03-design-decisions](design/03-design-decisions.md) 展开 |
+| [design/03-design-decisions.md](design/03-design-decisions.md) | 8 条关键设计决策（一致性枢纽、键选型、写入顺序、锁序、阈值、度量口径、零依赖、外部后端边界） | 评审 / 实现前确认关键取舍；§4.1、§4.3、§4.8 被架构与路线图引用 | 承接 [02-architecture](design/02-architecture.md)；约束 [04-roadmap](design/04-roadmap.md) 落地 |
+| [design/04-roadmap.md](design/04-roadmap.md) | 阶段 0–3 的目标、文件级交付物、验收标准 | 排期与验收；逐阶段落地 | 引用 [01-baseline](design/01-baseline.md)；受 [03-design-decisions](design/03-design-decisions.md) 约束；接口见 [02-architecture](design/02-architecture.md) |
 | [design/05-principles.md](design/05-principles.md) | 5 条贯穿性原则 | 任何阶段改动前的准绳 | 贯穿全部子卷 |
 
 ## 章节映射与交叉引用
@@ -49,8 +49,8 @@ LouisCache 目前是**纯头文件 C++17 缓存库**，只做**精确匹配**的
 |---|---|---|
 | §1 项目定位与边界 | 本文档 [一、项目定位与边界](#一项目定位与边界) | `#11-现状`、`#12-扩展目标`、`#13-使用者与边界`、`#14-明确不做` |
 | §2 当前基线（阶段 0） | [design/01-baseline.md](design/01-baseline.md) | `#当前基线阶段-0-已完成`、`#21-地基已具备语义层可直接依赖的三条语义`、`#22-阶段-0-遗留需在阶段-1-顺手补齐的缺口` |
-| §3 总体架构 | [design/02-architecture.md](design/02-architecture.md) | `#总体架构`、`#31-get-数据流`、`#32-put-数据流`、`#33-各模块的自研--现成分界`、`#34-分层职责` |
-| §4 关键设计决策 | [design/03-design-decisions.md](design/03-design-decisions.md) | `#41-一致性枢纽leavecallback-是唯一清理出口`、`#42-entrystore-用-id-而非-prompt-作-key`、`#43-写入顺序先存储后索引`、`#44-锁序持有语义层锁时不得调用-entrystore`、`#45-阈值判定--策略层`、`#46-distance--similarity-转换挡在适配层`、`#47-零依赖原则与可选开关` |
+| §3 总体架构 | [design/02-architecture.md](design/02-architecture.md) | `#总体架构`、`#31-get-数据流`、`#32-put-数据流`、`#33-各模块的自研--现成分界`、`#34-分层职责`、`#35-关键类职责与接口` |
+| §4 关键设计决策 | [design/03-design-decisions.md](design/03-design-decisions.md) | `#41-一致性枢纽leavecallback-是唯一清理出口`、`#42-entrystore-用-id-而非-prompt-作-key`、`#43-写入顺序先存储后索引`、`#44-锁序持有语义层锁时不得调用-entrystore`、`#45-阈值判定--策略层`、`#46-distance--similarity-转换挡在适配层`、`#47-零依赖原则与可选开关`、`#48-存储--向量索引可外部化清理边界与决策留在进程内` |
 | §5 分阶段任务清单 | [design/04-roadmap.md](design/04-roadmap.md) | `#阶段-0--地基--已完成`、`#阶段-1--mvp保持零依赖`、`#阶段-2--真实向量化与生产化`、`#阶段-3--评测与差异化` |
 | §6 贯穿性原则 | [design/05-principles.md](design/05-principles.md) | `#贯穿性原则` |
 
