@@ -1,6 +1,6 @@
 # 分阶段任务清单
 
-> **分卷**：第 5 卷「分阶段任务清单」　|　**文档版本**：v0.1　|　**最近更新**：2026-10-14　|　**对应原文档**：第五节（§5）　|　**关联**：[关键设计决策](03-design-decisions.md) · [贯穿性原则](05-principles.md)
+> **分卷**：第 5 卷「分阶段任务清单」　|　**文档版本**：v0.1　|　**最近更新**：2026-10-19　|　**对应原文档**：第五节（§5）　|　**关联**：[关键设计决策](03-design-decisions.md) · [贯穿性原则](05-principles.md)
 
 ---
 
@@ -16,94 +16,21 @@
 
 **交付物（文件级）**：
 
-- [ ] `src/Semantic/Embedder.h`：`Embedder` 接口 + `HashEmbedder`（确定性、可复现，仅供测试）
+- [x] `src/Semantic/Embedder.h`：`Embedder` 接口 + `HashEmbedder`（确定性、可复现，仅供测试）——**已实现**：默认 `dim = 128`、`ngram = 2`，`modelId()` 形如 `hash-embedder:v1:fnv1a64:ngram=2:dim=128`（实现与算法见 [HashEmbedder 实现与算法详解](../HashEmbedder实现与算法详解.md)）
 - [ ] `src/Semantic/VectorIndex.h`：`VectorIndex` 接口 + `BruteForceIndex`（内部维护 `id → vector`，支持 `remove`）
 - [ ] `src/Semantic/ExactIndex.h`：`prompt → id` 精确索引（若足够薄，可内联进 `SemanticCache`）
-- [ ] `src/Semantic/SemanticCache.h`：编排层，见下方接口草案
+- [ ] `src/Semantic/SemanticCache.h`：编排层，接口见 [总体架构 §3.5.1](02-architecture.md#351-semanticcache编排层--草案)
 - [ ] `src/Semantic/Options.h` / `CacheStats.h`：配置与指标
 - [ ] `src/Ttl/TtlCache.h`：`Policy` 装饰器，惰性删除 + 可手动驱动的定期删除，产出 `LeaveReason::Expired`
 - [ ] `tests/SemanticCache_test.cc`、`tests/TtlCache_test.cc`
 
-**接口草案**（具体签名以实现时为准）：
-
-```cpp
-// ---- Embedder.h ----
-class Embedder {
- public:
-  virtual ~Embedder() = default;
-  virtual std::vector<float> embed(const std::string& text) const = 0;
-  virtual size_t dim() const = 0;
-  // 模型指纹：向量空间标识。持久化索引加载时校验，不同指纹不可比较
-  virtual std::string modelId() const = 0;
-};
-
-// ---- VectorIndex.h ----
-struct VectorMatch {
-  uint64_t id;
-  float score;  // 相似度，越大越相似
-};
-
-class VectorIndex {
- public:
-  virtual ~VectorIndex() = default;
-  virtual void add(uint64_t id, const std::vector<float>& vec) = 0;
-  virtual void remove(uint64_t id) = 0;
-  // k 为返回条数上限；返回结果按 score 降序
-  virtual std::vector<VectorMatch> search(const std::vector<float>& query, size_t k) const = 0;
-  virtual size_t size() const = 0;
-};
-
-// ---- Options.h / CacheStats.h ----
-struct Options {
-  size_t capacity = 1000;         // EntryStore 容量
-  float hitThreshold = 0.85f;     // 语义命中阈值
-  size_t searchK = 5;             // ANN 返回条数
-  bool exactIndexEnabled = true;  // 是否启用第 0 步精确匹配
-};
-
-struct CacheStats {
-  uint64_t exactHits = 0;    // 精确命中
-  uint64_t semanticHits = 0; // 语义命中
-  uint64_t misses = 0;
-  uint64_t evictions = 0;    // LeaveReason::Evicted
-  uint64_t expirations = 0;  // LeaveReason::Expired
-  uint64_t puts = 0;
-};
-
-// ---- SemanticCache.h ----
-struct GetResult {
-  bool hit = false;
-  std::string response;
-  float score = 0.0f;   // 精确命中记 1.0
-  bool exact = false;   // 是否由精确匹配命中
-};
-
-class SemanticCache {
- public:
-  SemanticCache(Options options,
-                std::shared_ptr<Embedder> embedder,
-                std::shared_ptr<VectorIndex> vectorIndex);
-
-  GetResult get(const std::string& prompt);
-  void put(const std::string& prompt, const std::string& response);
-  void remove(const std::string& prompt);
-
-  CacheStats stats() const;
-  size_t size() const;
-
- private:
-  struct Entry {  // 必须自带 prompt：回调只能拿到 (id, Entry, reason)
-    std::string prompt;
-    std::string response;
-  };
-  // ... exactIndex_ / vectorIndex_ / embedder_ / store_(Policy<uint64_t, Entry>)
-};
-```
+> 各模块的职责边界与接口草稿见 [总体架构 §3.5](02-architecture.md#35-关键类职责与接口)，此处不再重复。
 
 **验收标准**：
 
 - [ ] 精确命中路径**不调用** `Embedder::embed`（用计数型 mock embedder 断言调用次数为 0）
 - [ ] 语义命中路径：query 与已存 prompt 相似度 ≥ 阈值即命中，并在 `GetResult` 中回传 `score`
+  - 样本需配合 `HashEmbedder` 默认参数选取：默认 `ngram = 2` 下，短句（6–7 字，差 1 字）余弦 ≈ 0.87、长句（21–22 字，差 1 字）≈ 0.98、无关句 ≈ 0.00；默认阈值 `0.85` 在过短样本上余量有限，参考数值见 [HashEmbedder 实现与算法详解 §5.1](../HashEmbedder实现与算法详解.md)
 - [ ] **无幽灵命中**：容量淘汰 / `remove` / TTL 过期后，同义 query 不再命中该条目（逐路径写用例）
 - [ ] **无漏清理**：`vectorIndex_->size()` 与 `store_.size()` 在任意操作序列后保持相等
 - [ ] 并发 `put` / `get` 下不崩、索引与存储不脱节（沿用阶段 0 的多线程测试写法）
