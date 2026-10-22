@@ -1,0 +1,100 @@
+#pragma once
+#include <algorithm>
+#include <cstdint>
+#include <mutex>
+#include <stdexcept>
+#include <unordered_map>
+#include <vector>
+
+namespace louis::cache {
+// 一条向量匹配结果：ID 与相似度（越大越相似）
+// score 依赖输入向量已 L2 归一化：此时点积即余弦相似度（见 design §4.6）
+struct VectorMatch {
+    uint64_t id;
+    float score;
+};
+
+class VectorIndex {
+   public:
+    virtual ~VectorIndex() = default;
+    // 向量空间维度，构造期固定，之后不可变
+    size_t dim() const noexcept { return dim_; }
+    // 添加向量（维度必须等于 dim()，否则抛 std::invalid_argument）
+    virtual void add(uint64_t id, const std::vector<float>& vector) = 0;
+    // 删除向量（幂等：id 不存在时为空操作）
+    virtual void remove(uint64_t id) = 0;
+    // 搜索向量,返回TopK个匹配结果；按 score 降序，并列分按 id 升序
+    // query 维度必须等于 dim()，否则返回空
+    virtual std::vector<VectorMatch> search(const std::vector<float>& query, size_t k) const = 0;
+    // 获取索引中向量的数量，应和EntryStore中的实际缓存数量一致
+    virtual size_t size() const = 0;
+
+   protected:
+    // 维度是所有实现的共同不变量：绑定向量空间、支撑 add/search 校验、供持久化元数据使用
+    explicit VectorIndex(size_t dim) : dim_(dim) {
+        if (dim_ == 0) throw std::invalid_argument("vector index dim must be > 0");
+    }
+
+   private:
+    const size_t dim_;
+};
+
+class BruteForceIndex : public VectorIndex {
+   public:
+    explicit BruteForceIndex(size_t dim) : VectorIndex(dim) {}
+    ~BruteForceIndex() override = default;
+    void add(uint64_t id, const std::vector<float>& vector) override;
+    void remove(uint64_t id) override;
+    std::vector<VectorMatch> search(const std::vector<float>& query, size_t k) const override;
+    size_t size() const override;
+
+   private:
+    std::unordered_map<uint64_t, std::vector<float>> vectors_;
+    mutable std::mutex mutex_;
+};
+
+inline void BruteForceIndex::add(uint64_t id, const std::vector<float>& vector) {
+    if (vector.size() != dim()) throw std::invalid_argument("vector dim must match index dim");
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    vectors_[id] = vector;
+}
+
+inline void BruteForceIndex::remove(uint64_t id) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    vectors_.erase(id);
+}
+
+inline std::vector<VectorMatch> BruteForceIndex::search(const std::vector<float>& query, size_t k) const {
+    // 维度不符（含空 query）视为无效查询，落到 miss；k == 0 直接返回空
+    if (k == 0 || query.size() != dim()) return {};
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<VectorMatch> matches;
+    // 全量扫描所有向量，计算相似度
+    for (const auto& [id, vector] : vectors_) {
+        float score = 0.0f;
+        // 累加计算点积
+        for (size_t i = 0; i < query.size(); ++i) {
+            score += query[i] * vector[i];
+        }
+        matches.push_back({id, score});
+    }
+    // 按相似度从大到小排序
+    std::sort(matches.begin(), matches.end(), [](const VectorMatch& a, const VectorMatch& b) {
+        if (a.score != b.score) {
+            return a.score > b.score;  // score 降序
+        }
+        return a.id < b.id;  // score 相同时 id 升序
+    });
+    // 取TopK个匹配结果
+    if (k > matches.size()) k = matches.size();
+    matches.resize(k);
+    return matches;
+}
+
+inline size_t BruteForceIndex::size() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return vectors_.size();
+}
+}  // namespace louis::cache

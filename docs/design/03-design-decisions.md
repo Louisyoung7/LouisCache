@@ -1,6 +1,6 @@
 # 关键设计决策
 
-> **分卷**：第 4 卷「关键设计决策」　|　**文档版本**：v0.1　|　**最近更新**：2026-10-19　|　**对应原文档**：第四节（§4）　|　**关联**：[总体架构](02-architecture.md) · [分阶段任务清单](04-roadmap.md)
+> **分卷**：第 4 卷「关键设计决策」　|　**文档版本**：v0.1　|　**最近更新**：2026-10-22　|　**对应原文档**：第四节（§4）　|　**关联**：[总体架构](02-architecture.md) · [分阶段任务清单](04-roadmap.md)
 
 ---
 
@@ -62,7 +62,7 @@ store_.setLeaveCallback([this](const uint64_t& id, const Entry& e, LeaveReason r
 
 ## 4.6 `distance → similarity` 转换挡在适配层
 
-hnswlib 与 BruteForce 内部用距离（越小越近），语义层用相似度（越大越相似）。方向转换与归一化口径**只在 `VectorIndex` 适配层内做一次**，不泄漏到阈值判定逻辑，避免两套口径混用导致的阈值失灵。
+`BruteForceIndex` 直接输出内积（输入已 L2 归一化时等价于余弦，天然「越大越相似」）；hnswlib 内部用距离（越小越近）。口径统一**只在 `VectorIndex` 适配层内做一次**：HNSW 适配层负责距离 → 相似度的方向转换，阈值判定逻辑只看到相似度，避免两套口径混用导致的阈值失灵。
 
 > 💡 相似度与距离为何方向相反？见 [概念入门 §2](00-primer.md#2-向量相似度与距离方向)。
 
@@ -76,7 +76,7 @@ hnswlib 与 BruteForce 内部用距离（越小越近），语义层用相似度
 
 **决策**：接口层面**允许外置**——`VectorIndex`（乃至 `EntryStore`）可被外部中间件（pgvector / Milvus / Qdrant / Redis-VSS 等）实现。但三条**必须留在进程内**：①「唯一清理出口」的**同步语义**；②淘汰策略；③命中判定。
 
-**为什么可换**：`VectorIndex` 是纯抽象（`add` / `remove` / `search` / `size`，见 [§3.5.3](02-architecture.md#353-vectorindex--bruteforceindex--草案)），依赖倒置使后端可替换，本就是设计目标的一部分（见 [§4.7](#47-零依赖原则与可选开关)）。
+**为什么可换**：`VectorIndex` 是纯抽象（`add` / `remove` / `search` / `size`，见 [§3.5.3](02-architecture.md#353-vectorindex--bruteforceindex--已实现)），依赖倒置使后端可替换，本就是设计目标的一部分（见 [§4.7](#47-零依赖原则与可选开关)）。
 
 **换的代价（必须一并处理的约束）**：
 

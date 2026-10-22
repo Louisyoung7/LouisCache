@@ -1,6 +1,6 @@
 # 总体架构
 
-> **分卷**：第 3 卷「总体架构」　|　**文档版本**：v0.1　|　**最近更新**：2026-10-19　|　**对应原文档**：第三节（§3）　|　**关联**：[当前基线](01-baseline.md) · [关键设计决策](03-design-decisions.md)
+> **分卷**：第 3 卷「总体架构」　|　**文档版本**：v0.1　|　**最近更新**：2026-10-22　|　**对应原文档**：第三节（§3）　|　**关联**：[当前基线](01-baseline.md) · [关键设计决策](03-design-decisions.md)
 
 ---
 
@@ -133,7 +133,7 @@ class SemanticCache {
 
 - **输出契约**：定长（`dim()` 个分量）、**L2 归一化**的向量。归一化后内积等价于余弦相似度，`VectorIndex` 可直接用点积打分，且相似度与文本长度解耦、与真实模型口径一致（见 [§4.6](03-design-decisions.md#46-distance--similarity-转换挡在适配层)）。
 - **`modelId()` 是向量空间指纹**：把影响向量空间的一切参数（算法、版本、`dim`、`ngram`…）编进字符串。持久化索引加载时**必须校验指纹一致**——不同指纹的向量不可比较；任何改变向量空间语义的改动（换算法 / 改常量）都要 **bump 版本号**，否则会被误判为同一空间，算出的相似度全部无意义。
-- **线程安全**：`embed()` 声明为 `const`、实现无内部可变状态，故可被多线程并发只读调用，与 `VectorIndex::search` 的 const 只读并发对齐（见 [§3.5.3](#353-vectorindex--bruteforceindex--草案)）。
+- **线程安全**：`embed()` 声明为 `const`、实现无内部可变状态，故可被多线程并发只读调用，与 `VectorIndex::search` 的 const 只读并发对齐（见 [§3.5.3](#353-vectorindex--bruteforceindex--已实现)）。
 - **真实后端**：ONNX Runtime + tokenizers-cpp，或 llama.cpp（GGUF，bge-small-zh-v1.5 / bge-m3）；自研部分仅几十行 pooling + L2 归一化适配（见 [§3.3](#33-各模块的自研--现成分界)）。
 
 ```cpp
@@ -153,9 +153,9 @@ class Embedder {
 - **带符号累加**：使向量均值 ≈ 0，cosine 近似「共享 n-gram 占比」——无关文本相互抵消而非恒正，贴合真实 embedding 的口径。
 - **确定性来源**：固定 FNV 偏移基数作初值、常量冻结，保证跨进程可复现；`dim` / `ngram` 参与 `modelId`，**改了它们就等于换了向量空间**。
 - **边界兜底**：长度不足 `ngram`（含空串）时退化为「整串单特征」，保证至少一个非零分量；累加恰好抵消为 0 时按整串哈希单桶重建，避免 cosine 出现 `0/0 = NaN`。
-- 接口与实现见 [Embedder.h](file:///home/louis/Documents/VSCodeProjects/CPlusPlusProjects/LouisCache/src/Semantic/Embedder.h#L9-L37)。
+- 接口与实现见 [Embedder.h](../../src/Semantic/Embedder.h#L9-L37)。
 
-### 3.5.3 `VectorIndex` / `BruteForceIndex` — 草案
+### 3.5.3 `VectorIndex` / `BruteForceIndex` — 已实现
 
 **它是什么**：一份「向量索引」——持有所有已缓存条目各自的**向量**（key 是条目 `id`，与 `EntryStore` 的 key 一一对应），并能对任意 query 向量**快速找出最相近的若干条**，即「近似最近邻搜索（ANN）」（见 [概念入门 §4](00-primer.md#4-ann-近似最近邻暴力搜索-vs-hnsw)）。
 
@@ -168,29 +168,58 @@ class Embedder {
 - **写入 / 删除与 `EntryStore` 同步**：`add(id, vec)` 在 `put` 的「后索引」阶段调用；`remove(id)` 由 `LeaveCallback` 触发，确保条目被淘汰 / TTL 过期 / 显式删除后其向量一并消失——这是**杜绝幽灵命中**的关键一环（见 [§4.1](03-design-decisions.md#41-一致性枢纽leavecallback-是唯一清理出口)）。因此应恒有 `VectorIndex::size() == EntryStore::size()`（验收项，见 [04-roadmap](04-roadmap.md#阶段-1--mvp保持零依赖)）。
 - **`search` 返回 top-k 且按 `score` 降序**：`k` 取自 `Options.searchK`。取 `k > 1` 而非只取最近邻，是为了给**歧义策略**（多个近邻分数接近时的取舍）留口（见 [§3.1](#31-get-数据流) 第 3 步）。
 - **`score` 语义统一**：对外一律是**相似度**（越大越相似，与阈值同向）。`BruteForceIndex` 在向量已 L2 归一化的前提下用内积（等价于余弦）；`HnswIndex` 内部多用距离，需在适配层换算成正向相似度，两套口径不得混用。
-- **查询是 `const`**：`search` 为只读，不修改索引状态，便于上层并发只读。
+- **维度构造期固定**：`VectorIndex(dim)` 让每个实现绑定一个向量空间，`dim == 0` 构造即抛 `std::invalid_argument`。`add` 维度不符抛异常（写入侧 fail-loud，且不污染索引）；`search` 维度不符（含空 query）返回空（读路径落到 miss，安全侧）；`k` 截断到 `min(k, size())`，不足 `k` 条不补位。维度同时是阶段 2 持久化元数据的必填项。
+- **结果可复现**：并列分按 `id` 升序作次级键，避免 `std::sort` 对相等元素次序未定义。
+- **查询是 `const`**：`search` 为只读，不修改索引状态，便于上层并发只读；维度校验在加锁前完成（`dim_` 不可变）。
 - **后端可替换**：`BruteForceIndex` 自持 `id → vector` 做**线性扫描**（O(N)、结果精确、实现简单、便于测试）；阶段 2 的 `HnswIndex` 用图结构走捷径（快，但可能漏掉个别最优解），其 `remove` 需 tombstone + 紧凑化（见 [04-roadmap](04-roadmap.md#阶段-2--真实向量化与生产化)）。
 
 **能否换成外部中间件（PostgreSQL / pgvector 等）？** 接口上**可以**——`VectorIndex` 是纯抽象，pgvector / Milvus / Qdrant / Redis-VSS 都能实现同一组方法，故存储与 ANN 是可替换的「轮子」（见 [§4.7](03-design-decisions.md#47-零依赖原则与可选开关)）。但「能换」不等于「原地替换」，代价与边界约束见 [§4.8](03-design-decisions.md#48-存储--向量索引可外部化清理边界与决策留在进程内)：**清理的同步语义、淘汰决策与命中判定仍留在进程内**，且不应只外置向量（需与 `response` 同库以保事务性）。因此外部后端只应作为 `server/` 侧可选适配器，不进核心库。
 
-**接口草案**（阶段 2 会在此基础上加持久化 `save` / `load` + `modelId` 校验，见 [04-roadmap](04-roadmap.md#阶段-2--真实向量化与生产化)）：
+**接口**（已实现；阶段 2 会在此基础上加持久化 `save` / `load` + `modelId` 校验，见 [04-roadmap](04-roadmap.md#阶段-2--真实向量化与生产化)）：
 
 ```cpp
 struct VectorMatch {
     uint64_t id;
-    float score;  // 相似度，越大越相似
+    float score;  // 相似度，越大越相似；输入已 L2 归一化时即点积
 };
 
 class VectorIndex {
    public:
     virtual ~VectorIndex() = default;
+    size_t dim() const noexcept;  // 构造期固定，之后不可变
+
+    // 维度必须等于 dim()，否则抛 std::invalid_argument
     virtual void add(uint64_t id, const std::vector<float>& vec) = 0;
+    // 幂等：id 不存在时为空操作
     virtual void remove(uint64_t id) = 0;
-    // k 为返回条数上限；结果按 score 降序
+    // k 为返回条数上限（超过 size() 自动截断）；结果按 score 降序，并列分按 id 升序
+    // query 维度必须等于 dim()，否则返回空
     virtual std::vector<VectorMatch> search(const std::vector<float>& query, size_t k) const = 0;
     virtual size_t size() const = 0;
+
+   protected:
+    explicit VectorIndex(size_t dim);  // dim == 0 抛 std::invalid_argument
+
+   private:
+    const size_t dim_;
+};
+
+class BruteForceIndex : public VectorIndex {
+   public:
+    explicit BruteForceIndex(size_t dim);
+
+    void add(uint64_t id, const std::vector<float>& vec) override;
+    void remove(uint64_t id) override;
+    std::vector<VectorMatch> search(const std::vector<float>& query, size_t k) const override;
+    size_t size() const override;
+
+   private:
+    std::unordered_map<uint64_t, std::vector<float>> vectors_;
+    mutable std::mutex mutex_;  // search/size 为 const，故 mutable
 };
 ```
+
+> 接口落点见 [VectorIndex.h](../../src/Semantic/VectorIndex.h#L17-L52)；22 个契约用例见 [VectorIndex_test.cc](../../tests/VectorIndex_test.cc)。
 
 ### 3.5.4 `ExactIndex` — 草案
 
@@ -263,7 +292,7 @@ class Policy {  // 阶段 0 已实现；EntryStore = Policy<uint64_t, Entry>
 };
 ```
 
-> 接口落点见 [Policy.h](file:///home/louis/Documents/VSCodeProjects/CPlusPlusProjects/LouisCache/src/Policy.h#L7-L47)。
+> 接口落点见 [Policy.h](../../src/Policy.h#L7-L47)。
 
 ### 3.5.6 `TtlCache` 装饰器 — 已实现
 
@@ -309,7 +338,7 @@ class TtlCache : public Policy<Key, Value> {
 };
 ```
 
-> 接口落点见 [TtlCache.h](file:///home/louis/Documents/VSCodeProjects/CPlusPlusProjects/LouisCache/src/Ttl/TtlCache.h#L13-L137)。
+> 接口落点见 [TtlCache.h](../../src/Ttl/TtlCache.h#L13-L137)。
 
 ### 3.5.7 `Options` / `CacheStats` — 已实现
 
@@ -317,7 +346,7 @@ class TtlCache : public Policy<Key, Value> {
 
 **职责要点**：
 
-- **`Options` 四项**：`capacity`（`EntryStore` 容量，经 `Policy::capacity` 下发）/ `hitThreshold`（语义命中阈值，策略层的**操作点**）/ `searchK`（ANN 取 top-k，取 `k > 1` 给歧义策略留口，见 [§3.5.3](#353-vectorindex--bruteforceindex--草案)）/ `exactIndexEnabled`（是否启用第 0 步精确匹配）。
+- **`Options` 四项**：`capacity`（`EntryStore` 容量，经 `Policy::capacity` 下发）/ `hitThreshold`（语义命中阈值，策略层的**操作点**）/ `searchK`（ANN 取 top-k，取 `k > 1` 给歧义策略留口，见 [§3.5.3](#353-vectorindex--bruteforceindex--已实现)）/ `exactIndexEnabled`（是否启用第 0 步精确匹配）。
 - **`CacheStats` 六个口径**：`exactHits` / `semanticHits` **分开计数**——第 0 步命中与语义命中成本不同，混在一起就看不出精确索引是否值回票价；`puts` / `misses` 反映吞吐与命中率；`evictions` / `expirations` 来自 `LeaveCallback`、按 `LeaveReason` 分类计数（见 [§4.1](03-design-decisions.md#41-一致性枢纽leavecallback-是唯一清理出口)）。
 - **写者单一**：`options_` 与 `stats_` 同属语义层锁保护的元数据，只在 `SemanticCache` 内维护（见 [§4.4](03-design-decisions.md#44-锁序持有语义层锁时不得调用-entrystore)）；`stats()` 对外返回**快照**。
 
@@ -339,7 +368,7 @@ struct CacheStats {
 };
 ```
 
-> 接口落点见 [Options.h](file:///home/louis/Documents/VSCodeProjects/CPlusPlusProjects/LouisCache/src/Semantic/Options.h#L6-L11) 与 [CacheStats.h](file:///home/louis/Documents/VSCodeProjects/CPlusPlusProjects/LouisCache/src/Semantic/CacheStats.h#L6-L13)。
+> 接口落点见 [Options.h](../../src/Semantic/Options.h#L6-L11) 与 [CacheStats.h](../../src/Semantic/CacheStats.h#L6-L13)。
 
 ---
 
