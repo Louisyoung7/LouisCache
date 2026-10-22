@@ -8,6 +8,7 @@
 
 namespace louis::cache {
 // 一条向量匹配结果：ID 与相似度（越大越相似）
+// score 依赖输入向量已 L2 归一化：此时点积即余弦相似度（见 design §4.6）
 struct VectorMatch {
     uint64_t id;
     float score;
@@ -18,13 +19,14 @@ class VectorIndex {
     virtual ~VectorIndex() = default;
     // 向量空间维度，构造期固定，之后不可变
     size_t dim() const noexcept { return dim_; }
-    // 添加向量（维度必须等于 dim()）
+    // 添加向量（维度必须等于 dim()，否则抛 std::invalid_argument）
     virtual void add(uint64_t id, const std::vector<float>& vector) = 0;
-    // 删除向量
+    // 删除向量（幂等：id 不存在时为空操作）
     virtual void remove(uint64_t id) = 0;
-    // 搜索向量,返回TopK个匹配结果（query 维度必须等于 dim()，否则返回空）
+    // 搜索向量,返回TopK个匹配结果；按 score 降序，并列分按 id 升序
+    // query 维度必须等于 dim()，否则返回空
     virtual std::vector<VectorMatch> search(const std::vector<float>& query, size_t k) const = 0;
-    // 获取向引中向量的数量，应和EntryStore中的实际缓存数量一致
+    // 获取索引中向量的数量，应和EntryStore中的实际缓存数量一致
     virtual size_t size() const = 0;
 
    protected:

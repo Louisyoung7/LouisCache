@@ -1,6 +1,6 @@
 # 分阶段任务清单
 
-> **分卷**：第 5 卷「分阶段任务清单」　|　**文档版本**：v0.1　|　**最近更新**：2026-10-19　|　**对应原文档**：第五节（§5）　|　**关联**：[关键设计决策](03-design-decisions.md) · [贯穿性原则](05-principles.md)
+> **分卷**：第 5 卷「分阶段任务清单」　|　**文档版本**：v0.1　|　**最近更新**：2026-10-22　|　**对应原文档**：第五节（§5）　|　**关联**：[关键设计决策](03-design-decisions.md) · [贯穿性原则](05-principles.md)
 
 ---
 
@@ -17,14 +17,15 @@
 **交付物（文件级）**：
 
 - [x] `src/Semantic/Embedder.h`：`Embedder` 接口 + `HashEmbedder`（确定性、可复现，仅供测试）——**已实现**：默认 `dim = 128`、`ngram = 2`，`modelId()` 形如 `hash-embedder:v1:fnv1a64:ngram=2:dim=128`（实现与算法见 [HashEmbedder 实现与算法详解](../HashEmbedder实现与算法详解.md)）
-- [ ] `src/Semantic/VectorIndex.h`：`VectorIndex` 接口 + `BruteForceIndex`（内部维护 `id → vector`，支持 `remove`）
+- [x] `src/Semantic/VectorIndex.h`：`VectorIndex` 接口 + `BruteForceIndex`（内部维护 `id → vector`；维度构造期固定，`add` 维度不符抛 `std::invalid_argument`，`search` 维度不符返回空、`k` 超界截断、并列分按 id 升序）——**已实现**
 - [ ] `src/Semantic/ExactIndex.h`：`prompt → id` 精确索引（若足够薄，可内联进 `SemanticCache`）
 - [ ] `src/Semantic/SemanticCache.h`：编排层，接口见 [总体架构 §3.5.1](02-architecture.md#351-semanticcache编排层--草案)
 - [ ] `src/Semantic/Options.h` / `CacheStats.h`：配置与指标
 - [ ] `src/Ttl/TtlCache.h`：`Policy` 装饰器，惰性删除 + 可手动驱动的定期删除，产出 `LeaveReason::Expired`
+- [x] `tests/VectorIndex_test.cc`：22 个用例，覆盖构造期维度、`k` 截断、维度校验、并列分次序、幂等 `remove`、并发与 `HashEmbedder` 端到端阈值——**已实现**
 - [ ] `tests/SemanticCache_test.cc`、`tests/TtlCache_test.cc`
 
-> 各模块的职责边界与接口草稿见 [总体架构 §3.5](02-architecture.md#35-关键类职责与接口)，此处不再重复。
+> 各模块的职责边界与接口见 [总体架构 §3.5](02-architecture.md#35-关键类职责与接口)，此处不再重复。
 
 **验收标准**：
 

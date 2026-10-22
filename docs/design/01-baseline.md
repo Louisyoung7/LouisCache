@@ -8,13 +8,13 @@
 
 | 能力 | 状态 | 落点 |
 |---|---|---|
-| `Policy` 抽象接口：`put` / `get`×2 / `remove` / `size` | ✅ | [Policy.h](file:///home/louis/Documents/VSCodeProjects/LouisCache/src/Policy.h#L7-L42) |
-| `LeaveReason { Evicted, Explicit, Expired }` + 回调注册 | ✅ | [Policy.h](file:///home/louis/Documents/VSCodeProjects/LouisCache/src/Policy.h#L5-L38) |
-| `remove()` 提升为虚接口（原先仅是 `LruCache` 上的非虚函数） | ✅ | [Policy.h](file:///home/louis/Documents/VSCodeProjects/LouisCache/src/Policy.h#L26) |
+| `Policy` 抽象接口：`put` / `get`×2 / `remove` / `size` | ✅ | [Policy.h](../../src/Policy.h#L7-L42) |
+| `LeaveReason { Evicted, Explicit, Expired }` + 回调注册 | ✅ | [Policy.h](../../src/Policy.h#L5-L38) |
+| `remove()` 提升为虚接口（原先仅是 `LruCache` 上的非虚函数） | ✅ | [Policy.h](../../src/Policy.h#L26) |
 | 6 种策略全部接入回调：LRU / LRU-K / Sharded LRU / LFU / Sharded LFU / ARC | ✅ | `src/LRU`、`src/LFU`、`src/ARC` |
 | **锁外分发**回调（回调内可安全重入缓存） | ✅ | 各实现均"锁内收集、锁外 `notifyLeave`" |
-| **内部流转静默**（复合结构内部迁移不通知） | ✅ | [LruKCache.h](file:///home/louis/Documents/VSCodeProjects/LouisCache/src/LRU/LruKCache.h)、[ArcCache.h](file:///home/louis/Documents/VSCodeProjects/LouisCache/src/ARC/ArcCache.h) |
-| 单元测试基建（Google Test + Conan + CTest） | ✅ | [tests/](file:///home/louis/Documents/VSCodeProjects/LouisCache/tests)，6 文件 **175 用例**全绿 |
+| **内部流转静默**（复合结构内部迁移不通知） | ✅ | [LruKCache.h](../../src/LRU/LruKCache.h)、[ArcCache.h](../../src/ARC/ArcCache.h) |
+| 单元测试基建（Google Test + Conan + CTest） | ✅ | [tests/](../../tests)，6 文件 **175 用例**全绿 |
 
 ## 2.1 地基已具备、语义层可直接依赖的三条语义
 
