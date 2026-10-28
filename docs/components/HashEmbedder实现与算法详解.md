@@ -1,26 +1,26 @@
 # HashEmbedder 实现与算法详解
 
-> **文档版本**：v0.1　|　**最近更新**：2026-10-18　|　**代码位置**：[src/Semantic/Embedder.h](../src/Semantic/Embedder.h)　|　**关联**：[总体架构](design/02-architecture.md) · [关键设计决策 §4.7](design/03-design-decisions.md) · [概念入门](design/00-primer.md) · [分阶段任务清单 阶段 1](design/04-roadmap.md)
+> **文档版本**：v0.1　|　**最近更新**：2026-10-18　|　**代码位置**：[src/Semantic/Embedder.h](../../src/Semantic/Embedder.h)　|　**关联**：[总体架构](../design/02-architecture.md) · [关键设计决策 §4.7](../design/03-design-decisions.md) · [概念入门](../design/00-primer.md) · [分阶段任务清单 阶段 1](../design/04-roadmap.md)
 
 ---
 
-本文面向两类问题：**HashEmbedder 为什么这么写**（实现），以及**它背后用到哪些算法与为什么成立**（原理）。全篇不需要 AI 背景；涉及 embedding 的通用概念时回链 [概念入门](design/00-primer.md)。
+本文面向两类问题：**HashEmbedder 为什么这么写**（实现），以及**它背后用到哪些算法与为什么成立**（原理）。全篇不需要 AI 背景；涉及 embedding 的通用概念时回链 [概念入门](../design/00-primer.md)。
 
 ## 一、它是什么，为什么存在
 
-`HashEmbedder` 是 [Embedder 接口](../src/Semantic/Embedder.h) 的一个**测试替身**：它把文本转成固定长度的浮点向量，但**不代表任何语义质量**。
+`HashEmbedder` 是 [Embedder 接口](../../src/Semantic/Embedder.h) 的一个**测试替身**：它把文本转成固定长度的浮点向量，但**不代表任何语义质量**。
 
-它存在的理由写在 [关键设计决策 §4.7 零依赖原则](design/03-design-decisions.md) 与 [贯穿性原则 5](design/05-principles.md) 里：真实模型（ONNX Runtime / llama.cpp）是重依赖，一旦引入，单测就需要模型文件、算力甚至网络。而语义缓存真正复杂、最容易出错的部分是**编排逻辑**（精确命中先于 embedding、容量淘汰后的清理、TTL 过期、无幽灵命中）。用一个**确定、可复现、零依赖**的假 embedder，就能让这些逻辑在任意环境下被完整测通。
+它存在的理由写在 [关键设计决策 §4.7 零依赖原则](../design/03-design-decisions.md) 与 [贯穿性原则 5](../design/05-principles.md) 里：真实模型（ONNX Runtime / llama.cpp）是重依赖，一旦引入，单测就需要模型文件、算力甚至网络。而语义缓存真正复杂、最容易出错的部分是**编排逻辑**（精确命中先于 embedding、容量淘汰后的清理、TTL 过期、无幽灵命中）。用一个**确定、可复现、零依赖**的假 embedder，就能让这些逻辑在任意环境下被完整测通。
 
-真实的语义质量是**可替换件**，阶段 2 才接入（[概念入门 §5](design/00-primer.md)、[分卷 04 阶段 2](design/04-roadmap.md)）。
+真实的语义质量是**可替换件**，阶段 2 才接入（[概念入门 §5](../design/00-primer.md)、[分卷 04 阶段 2](../design/04-roadmap.md)）。
 
-它必须满足的契约就是 [Embedder](../src/Semantic/Embedder.h) 的三个纯虚函数：
+它必须满足的契约就是 [Embedder](../../src/Semantic/Embedder.h) 的三个纯虚函数：
 
 | 接口 | 语义 | 对 HashEmbedder 的约束 |
 |---|---|---|
 | `embed(text)` | 文本 → 向量 | 确定性：同输入必得逐字节相同的输出；且**相似文本的余弦相似度应高于无关文本** |
 | `dim()` | 向量维度 | 固定且自洽，`embed()` 返回的长度必须等于它 |
-| `modelId()` | 向量空间指纹 | 把影响向量空间的所有参数编进来，供持久化索引加载时校验（[概念入门 §6](design/00-primer.md)） |
+| `modelId()` | 向量空间指纹 | 把影响向量空间的所有参数编进来，供持久化索引加载时校验（[概念入门 §6](../design/00-primer.md)） |
 
 其中第二条的"相似文本应更相似"**不是**语义质量要求，而是**序关系**要求——只有它成立，"语义命中路径"这类用例才有断言对象。这是本实现里唯一需要算法支撑的地方，也是下文 §三 的全部动机。
 
@@ -73,7 +73,7 @@ for each byte b:
     h = (h XOR b) * FNV_prime           // FNV_prime = 1099511628211 = 0x100000001b3
 ```
 
-对应实现见 `fnv1a`（[Embedder.h](../src/Semantic/Embedder.h)，源码注释「FNV-1a 64 位」段）：
+对应实现见 `fnv1a`（[Embedder.h](../../src/Semantic/Embedder.h)，源码注释「FNV-1a 64 位」段）：
 
 ```cpp
 inline uint64_t HashEmbedder::fnv1a(const unsigned char* p, size_t n, uint64_t seed) {
@@ -207,7 +207,7 @@ cos(a, b) = (a · b) / (‖a‖ ‖b‖) = a · b
 
 于是相似度的物理含义变得干净：在带符号累加下，`cos` 近似等于**两个文本共享的 n-gram 占比**（减去无关碰撞的抵消项）。
 
-这与真实模型的口径一致——真实 embedding 通常也做 L2 归一化，[分卷 03 §4.6](design/03-design-decisions.md) 要求距离/相似度换算只发生在 `VectorIndex` 适配层一次，本条保证了 HashEmbedder 输出的 score 能直接进同一套阈值判定而无需特殊分支（[概念入门 §2、§3](design/00-primer.md)）。
+这与真实模型的口径一致——真实 embedding 通常也做 L2 归一化，[分卷 03 §4.6](../design/03-design-decisions.md) 要求距离/相似度换算只发生在 `VectorIndex` 适配层一次，本条保证了 HashEmbedder 输出的 score 能直接进同一套阈值判定而无需特殊分支（[概念入门 §2、§3](../design/00-primer.md)）。
 
 ### 3.8 维度 `dim` 与碰撞
 
@@ -222,7 +222,7 @@ cos(a, b) = (a · b) / (‖a‖ ‖b‖) = a · b
 
 ## 四、逐段代码解析
 
-代码集中在 [src/Semantic/Embedder.h](../src/Semantic/Embedder.h)，位于命名空间 `louis::cache`，全部为 header-only（本项目是 INTERFACE 库，见 [src/CMakeLists.txt](../src/CMakeLists.txt)）。
+代码集中在 [src/Semantic/Embedder.h](../../src/Semantic/Embedder.h)，位于命名空间 `louis::cache`，全部为 header-only（本项目是 INTERFACE 库，见 [src/CMakeLists.txt](../../src/CMakeLists.txt)）。
 
 **1. 接口 `Embedder`**——三个纯虚函数，`modelId` 的注释点明了它的用途（向量空间标识、加载时校验）。
 
@@ -274,7 +274,7 @@ return v;
 return "hash-embedder:v1:fnv1a64:ngram=" + std::to_string(ngram_) + ":dim=" + std::to_string(dim_);
 ```
 
-把**决定向量空间的所有可变量**编进指纹：算法族（`fnv1a64`）、`ngram`、`dim`。并在注释里定下规则：**任何改变向量空间语义的改动（换算法、换常量、改窗口策略）都必须 bump `v1`**。否则持久化索引会误判新旧空间为同一个，加载后所有相似度都不再有意义（[概念入门 §6](design/00-primer.md)）。
+把**决定向量空间的所有可变量**编进指纹：算法族（`fnv1a64`）、`ngram`、`dim`。并在注释里定下规则：**任何改变向量空间语义的改动（换算法、换常量、改窗口策略）都必须 bump `v1`**。否则持久化索引会误判新旧空间为同一个，加载后所有相似度都不再有意义（[概念入门 §6](../design/00-primer.md)）。
 
 ## 五、参数与实测
 
@@ -307,7 +307,7 @@ n=2 → 5 + 14 = 19        n=3 → 4 + 13 = 17        n=4 → 3 + 12 = 15
 
 1. **共享窗口数随 n 增大而线性减少**（每个相同字节段两端各被"吃掉" `n-1` 个窗口），而分母 √(|A|·|B|) 几乎不变 → 余弦相似度随 n **单调下降**。预测的 0.8744 / 0.8230 与实测的 0.8652 / 0.7961 吻合（差值是桶碰撞噪声）。
 2. 因此 `n = 3` 在短句上会掉到阈值以下；改成 `n = 2` 把短句拉回 0.8652，同时长句几乎不变（0.9811 → 0.9799）。
-3. 阈值 0.85 本身是阶段 1 的**占位值**，是"精确率/召回率曲线的操作点"，标定属于阶段 3（[分卷 03 §4.5](design/03-design-decisions.md)）。所以这里的选择是：让默认参数在**典型短句**上也能通过，而不是反过来让测试样本迁就参数。
+3. 阈值 0.85 本身是阶段 1 的**占位值**，是"精确率/召回率曲线的操作点"，标定属于阶段 3（[分卷 03 §4.5](../design/03-design-decisions.md)）。所以这里的选择是：让默认参数在**典型短句**上也能通过，而不是反过来让测试样本迁就参数。
 
 ### 5.2 默认维度 `dim = 128`
 
@@ -334,12 +334,12 @@ n=2 → 5 + 14 = 19        n=3 → 4 + 13 = 17        n=4 → 3 + 12 = 15
 ## 七、确定性、线程安全与性能
 
 - **确定性**：全部随机性都来自"输入内容 → 固定哈希"，实现中没有 `rand`、时间、地址、线程 id 等环境依赖。这是跨进程单测与持久化索引能成立的前提（也是 §3.1 拒绝 `std::hash` 的原因）。
-- **线程安全**：`dim_`/`ngram_` 构造后只读，`embed` 不触碰任何共享可变状态、不分配全局资源，因此多个线程并发调用安全。接口把 `embed` 声明为 `const`，正好把这层保证固化下来（[概念入门 §1](design/00-primer.md) 的向量化调用会被并发高频触发）。
+- **线程安全**：`dim_`/`ngram_` 构造后只读，`embed` 不触碰任何共享可变状态、不分配全局资源，因此多个线程并发调用安全。接口把 `embed` 声明为 `const`，正好把这层保证固化下来（[概念入门 §1](../design/00-primer.md) 的向量化调用会被并发高频触发）。
 - **性能**：时间 `O(len · ngram)`（窗口数 × 每窗口哈希字节数），空间 `O(dim)`，除返回值外**零额外分配**。对一个只在单测与兜底路径上使用的替身而言绰绰有余。
 
 ## 八、`modelId` 指纹与演进规则
 
-`modelId` 是"向量空间身份证"，用途在 [概念入门 §6](design/00-primer.md) 与阶段 2 的持久化加载校验。规则：
+`modelId` 是"向量空间身份证"，用途在 [概念入门 §6](../design/00-primer.md) 与阶段 2 的持久化加载校验。规则：
 
 - **进指纹的**：任何改变输出向量语义的东西——算法族、`dim`、`ngram`、以及 `mix`/`fnv1a` 中的常量；
 - **当前形式**：`hash-embedder:v1:fnv1a64:ngram=2:dim=128`；
@@ -383,4 +383,4 @@ n=2 → 5 + 14 = 19        n=3 → 4 + 13 = 17        n=4 → 3 + 12 = 15
 - **MurmurHash3 `fmix64`**：MurmurHash3 的 64 位终结器，用于位白化（雪崩）。
 - **特征哈希（hashing trick）**：Weinberger, Dasgupta, Langford, Smola, Attenberg, *Feature Hashing for Large Scale Multitask Learning*, ICML 2009。带符号累加使哈希后内积成为原内积的无偏估计，即本实现 §3.6 的依据。
 - **UTF-8**：中文常用汉字为 3 字节，是 §3.4 "字节窗口不对齐字符"现象的直接原因。
-- 项目内概念对照：[概念入门](design/00-primer.md)（Embedding / 相似度方向 / 归一化与维度 / 模型生态 / 模型指纹）。
+- 项目内概念对照：[概念入门](../design/00-primer.md)（Embedding / 相似度方向 / 归一化与维度 / 模型生态 / 模型指纹）。

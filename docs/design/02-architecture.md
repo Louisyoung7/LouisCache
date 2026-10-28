@@ -43,7 +43,7 @@
 
 | 模块 | 现成方案 | 自研部分 |
 |---|---|---|
-| Embedding | ONNX Runtime + tokenizers-cpp，或 llama.cpp（GGUF，bge-small-zh-v1.5 / bge-m3） | 几十行 pooling + L2 归一化适配；`HashEmbedder` 测试件（确定性字节 n-gram 特征哈希，[实现与算法](../HashEmbedder实现与算法详解.md)）；`modelId()` 指纹 |
+| Embedding | ONNX Runtime + tokenizers-cpp，或 llama.cpp（GGUF，bge-small-zh-v1.5 / bge-m3） | 几十行 pooling + L2 归一化适配；`HashEmbedder` 测试件（确定性字节 n-gram 特征哈希，[实现与算法](../components/HashEmbedder实现与算法详解.md)）；`modelId()` 指纹 |
 | 向量索引 | hnswlib（头文件库，FetchContent） | 接口抽象 + `distance → similarity` 方向转换（挡在适配层内） |
 | 命中判定 | —— | 阈值判定、歧义策略——**这就是策略层** |
 | 淘汰 | 现有库 + `TtlCache` 装饰器 | 语义感知淘汰（阶段 3 差异化方向） |
@@ -149,7 +149,7 @@ class Embedder {
 
 **`HashEmbedder`（测试替身，已实现）**：确定性、可复现的**假向量生成器**，仅用于测试编排逻辑，**不代表语义质量**。
 
-- **算法（特征哈希 / hashing trick）**：滑动 n-gram → FNV-1a 64 位哈希 → 过 MurmurHash3 终结器 `mix` 做低位白化 → `% dim` 定桶、取符号位定正负 → 累加 → L2 归一化。算法细节见 [HashEmbedder 实现与算法详解](../HashEmbedder实现与算法详解.md)。
+- **算法（特征哈希 / hashing trick）**：滑动 n-gram → FNV-1a 64 位哈希 → 过 MurmurHash3 终结器 `mix` 做低位白化 → `% dim` 定桶、取符号位定正负 → 累加 → L2 归一化。算法细节见 [HashEmbedder 实现与算法详解](../components/HashEmbedder实现与算法详解.md)。
 - **带符号累加**：使向量均值 ≈ 0，cosine 近似「共享 n-gram 占比」——无关文本相互抵消而非恒正，贴合真实 embedding 的口径。
 - **确定性来源**：固定 FNV 偏移基数作初值、常量冻结，保证跨进程可复现；`dim` / `ngram` 参与 `modelId`，**改了它们就等于换了向量空间**。
 - **边界兜底**：长度不足 `ngram`（含空串）时退化为「整串单特征」，保证至少一个非零分量；累加恰好抵消为 0 时按整串哈希单桶重建，避免 cosine 出现 `0/0 = NaN`。

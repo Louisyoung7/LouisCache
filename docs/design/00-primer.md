@@ -33,7 +33,7 @@
 ## 5. Embedding 模型生态
 
 - **这是什么**：真正产向量的是**预训练模型**（本项目中文场景用 bge-small-zh-v1.5 一类）。典型流程：分词（tokenizer）→ 送进模型推理（ONNX Runtime 或 llama.cpp）→ 把每个 token 的输出平均（mean pooling）→ 归一化，得到整句话的向量。
-- **在本项目里扮演什么角色**：阶段 2 把测试用的 `HashEmbedder` 换成真实模型；`HashEmbedder` 只生成确定性的**假向量**，专门用来测编排逻辑，不代表语义质量。它的实现（字节 n-gram 特征哈希 + FNV-1a + L2 归一化）见 [HashEmbedder 实现与算法详解](../HashEmbedder实现与算法详解.md)。
+- **在本项目里扮演什么角色**：阶段 2 把测试用的 `HashEmbedder` 换成真实模型；`HashEmbedder` 只生成确定性的**假向量**，专门用来测编排逻辑，不代表语义质量。它的实现（字节 n-gram 特征哈希 + FNV-1a + L2 归一化）见 [HashEmbedder 实现与算法详解](../components/HashEmbedder实现与算法详解.md)。
 - **关联设计决策**：架构 §3.3、roadmap 阶段 2。
 
 ## 6. 模型指纹 modelId
