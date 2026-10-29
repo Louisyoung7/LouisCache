@@ -38,7 +38,6 @@ using louis::cache::BruteForceIndex;
 using louis::cache::CacheEntry;
 using louis::cache::GetResult;
 using louis::cache::HashEmbedder;
-using louis::cache::LeaveReason;
 using louis::cache::LruCache;
 using louis::cache::Options;
 using louis::cache::Policy;
@@ -451,30 +450,36 @@ TEST(SemanticCacheTest, RemoveUnknownOrRepeatedPromptIsNoop) {
     EXPECT_EQ(cache.size(), 0u);
 }
 
-// ================================================================ 重复 put（边界 / 已知限制）
+// ================================================================ 重复 put（边界 / 幂等性）
 
-// 旧条目淘汰时不得误删新条目的精确映射（onLeave 必须条件删除）
-TEST(SemanticCacheTest, DuplicatePutLatestWinsAfterOldEntryEvicted) {
+// 重复 put 必须替换旧条目：旧向量与精确映射一并离场，不占两份容量
+TEST(SemanticCacheTest, DuplicatePutReplacesOldEntry) {
     auto index = std::make_unique<CountingIndex>(kDim);
     auto* indexRaw = index.get();
     SemanticCache cache(makeOptions(2), std::make_shared<HashEmbedder>(), std::move(index));
 
     cache.put(kWeather, "旧的");
     cache.put(kWeather, "新的");
-    ASSERT_EQ(cache.size(), 2u) << "重复 put 当前会留下旧条目（已记录的已知限制）";
 
-    cache.put(kParis, "餐厅");  // 淘汰最早的 id，即「旧的」
+    EXPECT_EQ(cache.size(), 1u) << "重复 put 应替换旧条目而不是并存";
+    EXPECT_EQ(indexRaw->size(), 1u) << "旧向量必须随旧条目一起删除";
+    EXPECT_EQ(cache.stats().evictions, 0u) << "替换属于显式删除，不应计入 evictions";
 
-    ASSERT_EQ(cache.size(), 2u);
-    EXPECT_EQ(indexRaw->size(), 2u);
     const GetResult r = cache.get(kWeather);
     EXPECT_TRUE(r.hit);
-    EXPECT_TRUE(r.exact) << "旧条目淘汰后，精确映射不应被误删";
+    EXPECT_TRUE(r.exact);
     EXPECT_EQ(r.response, "新的");
+
+    // 只占一格容量：再插一条不会触发淘汰
+    cache.put(kParis, "餐厅");
+    EXPECT_EQ(cache.size(), 2u);
+    EXPECT_EQ(cache.stats().evictions, 0u);
+    EXPECT_EQ(cache.get(kWeather).response, "新的");
+    EXPECT_TRUE(cache.get(kParis).exact);
 }
 
-// 重复 put 占两份容量：语义检索时并列分会优先返回较小 id（旧响应）
-TEST(SemanticCacheTest, DuplicatePutSemanticTieMayReturnStaleResponse) {
+// 重复 put 替换后只剩最新条目：语义路径也必须返回最新响应
+TEST(SemanticCacheTest, DuplicatePutSemanticHitReturnsLatestResponse) {
     SemanticCache cache(makeOptions(2), std::make_shared<HashEmbedder>(), std::make_unique<BruteForceIndex>(kDim));
     cache.put(kWeather, "旧的");
     cache.put(kWeather, "新的");
@@ -482,7 +487,7 @@ TEST(SemanticCacheTest, DuplicatePutSemanticTieMayReturnStaleResponse) {
     const GetResult r = cache.get(kWeatherVariant);
 
     EXPECT_TRUE(r.hit);
-    EXPECT_EQ(r.response, "新的") << "并列分下当前按 id 升序，可能返回旧响应";
+    EXPECT_EQ(r.response, "新的") << "替换旧条目后不应再存在并列分的旧向量";
 }
 
 // ================================================================ TTL（生命周期 / 时序）

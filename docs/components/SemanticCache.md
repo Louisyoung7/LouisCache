@@ -174,9 +174,14 @@ SemanticCache cache(options, embedder, std::move(index), std::move(store));
 
 要点：精确路径**不调用** `embed`；语义路径命中时 `store_->get` 同时完成 recency 刷新（touch）。
 
-### 2.2 `put(prompt, response)` — 先存储、后索引，并做写后复核
+### 2.2 `put(prompt, response)` — 覆盖写（upsert），先存储、后索引，并做写后复核
+
+同一 prompt 重复写入是覆盖而非追加，判重只以 `exactIndex_` 为依据（决策与否决方案见 [ADR-0002](file:///home/louis/Documents/VSCodeProjects/CPlusPlusProjects/LouisCache/docs/adr/adr-0002-duplicate-put-upsert.md)）。
 
 ```text
+[S]  old = exactIndex_.find(prompt)            // 与 get 一致：读路径只用 find
+[空] if (old) store_->remove(*old)             // 旧条目经 onLeave(Explicit) 离场：删向量 + 条件删映射
+
 [空] id = nextId_.fetch_add(1)
 [S]  ++stats_.puts
 [空] vec = embedder_->embed(prompt)            // 先算向量：失败则不落任何存储
@@ -194,6 +199,10 @@ SemanticCache cache(options, embedder, std::move(index), std::move(store));
 ```
 
 第 ⑤ 步是必要的补偿：如果另一个线程在 `exists` 返回 true 之后、`add` 之前驱逐了该 id，回调执行时向量尚不存在，`add` 会留下一份永远无人清理的向量（`vectorIndex_->size() != store_->size()`）。先 `add` 再复核即可收敛；若驱逐发生在 `add` 之后，则由回调正常清理。
+
+覆盖写的清理复用同一条出口：`store_->remove` 会同步触发 `onLeave(Explicit)`，因此替换、淘汰、过期都只经过 `onLeave` 一处，没有第二套删除逻辑。替换只计入 `stats_.puts`，不计 `evictions`。
+
+两处与当前实现的差异（已知待补，见 §3.2）：`embed` 应先于 `store_->put`，以及第 ⑤ 步写后复核尚未落地。
 
 ### 2.3 `remove(prompt)` — 只调 `store_`，不另写删除逻辑
 
@@ -259,17 +268,20 @@ SemanticCache cache(options, embedder, std::move(index), std::move(store));
 
 > 这些契约目前只存在于实现里。后续建议同步到 `VectorIndex.h` / `Policy.h` 的接口注释，让新实现者不必读本文也能看到；本文暂作设计侧的事实来源。
 
-### 3.2 已知限制（阶段 1 接受，不额外处理）
+### 3.2 已知限制与待修正项（阶段 1）
 
-- 同一 prompt 重复 `put` 会留下旧条目（同 prompt 两份 response），只占用额外容量；精确映射始终指向最新条目，旧条目淘汰时 `onLeave` 条件删除，不会误删新映射。需要去重时在 `put` 前查 `exactIndex_` 并先 `store_->remove(oldId)`。
+- 同一 prompt 重复 `put` 已实现为覆盖写（§2.2、ADR-0002）：旧条目经 `store_->remove` 触发 `onLeave(Explicit)` 一并清掉旧向量与映射，不占两份容量。剩余限制在于并发窗口：两个线程同时 put 同一 prompt 时可能都读不到旧 id，出现短暂双插；后写者持有 `exactIndex_` 映射，先写者留在 store 中直到被淘汰，且其 `onLeave` 的条件删除不会误删新映射。严格幂等留给 OPT-001（内容派生 id）。
+- `embed` 抛异常、以及 `exists` 与 `add` 之间被并发驱逐这两条路径当前仍会留下残状态：前者在 store 中留一条无向量的条目，后者在索引中留一条无条目的向量。对应测试（`EmbedFailureMustNotLeaveResidentUnindexedEntry`、`EvictionBetweenExistsAndAddLeavesOrphanVector`）仍失败，修法即 §2.2 的"先 embed"与第 ⑤ 步写后复核。
+- `options_.exactIndexEnabled` 目前只声明未接线：`get` 仍无条件先查 `exactIndex_`（对应测试 `ExactIndexDisabledSkipsExactPath` 仍失败）。按 §一 的约定，开关只应关闭 `get` 的第 0 步，映射与写入侧照旧维护。
+- `size()` 当前返回 `vectorIndex_->size()`，与声明注释的 `= store_->size()` 不一致；这会让 `TtlCache` 注入后失去 `size()` 触发的惰性 purge（对应测试 `TtlPurgeViaSizeCountsExpiration` 仍失败）。验收口径仍是"稳定后两者相等"，实现应改回 `store_->size()`。
 - TTL 通过注入 `TtlCache` 组合，核心类与 `Options` 都不感知 TTL。注意注入后 `store_->get()` / `store_->exists()` 可能因惰性过期触发 `onLeave`，因此这两个调用同样不得发生在 `mu_` 作用域内（与 `LruCache` 约束一致）。
-- 注入路径下 `options.capacity` 不生效，容量由注入的 store 决定；`size()` 取 `store_->size()`。查看索引是否与存储脱节时，用 `cache.size()` 对比注入前保留的 `vectorIndex` 裸指针。
+- 注入路径下 `options.capacity` 不生效，容量由注入的 store 决定；查看索引是否与存储脱节时，用 `cache.size()` 对比注入前保留的 `vectorIndex` 裸指针（前提是 `size()` 已改为 `store_->size()`）。
 
 ## 四、实现顺序
 
 1. `SemanticCache.h` 骨架：`CacheEntry`、`GetResult`、成员类型、主构造（四参）与便捷构造（三参转调）、校验与回调注册。
 2. `onLeave` + `findExactLocked` / `eraseExactIfMatchesLocked`。
-3. `put`（含驻留判断与写后复核）。
+3. `put`（重复判定与覆盖写、驻留判断、写后复核）。
 4. `get`（精确分支 → 语义分支，统计口径分开计）。
 5. `remove` / `stats` / `size`，跑一遍现有测试构建确认无编译回归。
 
@@ -301,7 +313,7 @@ remove    : store_->remove(fnv1a64(prompt))
 onLeave   : vectorIndex_->remove(id)     // 不再需要 prompt 反查
 ```
 
-- 收益：prompt 从 2 份降到 1 份，exact 哈希表整体消失，一致性点 3 → 2；同一 prompt 重复 `put` 天然幂等（同 id 更新），顺带消掉"旧条目残留 + 回调误删新映射"的已知限制；`remove(prompt)` 不再依赖 exact 映射，`exactIndexEnabled` 开关也随之失去意义；id 由内容决定，重启后不变，阶段 2 持久化可少存一份 id 映射。
+- 收益：prompt 从 2 份降到 1 份，exact 哈希表整体消失，一致性点 3 → 2；同一 prompt 重复 `put` 变成同 id 覆盖写，并发下也幂等（不再有"先查后删"的窗口）；`remove(prompt)` 不再依赖 exact 映射，`exactIndexEnabled` 开关也随之失去意义；id 由内容决定，重启后不变，阶段 2 持久化可少存一份 id 映射。
 - 代价：64 位碰撞在百万条量级约 `1e-8`，精确命中时用 `entry.prompt == prompt` 校验一次即可降级走语义路径；但"同 id 不同 prompt 互相覆盖"要绝对安全就得把 key 扩到 128 位，`Policy` / `VectorIndex` 的 `uint64_t` 接口需跟着改。另外换哈希算法即换 id 空间，需与 `modelId` 一起写入持久化元数据。
 - 时机：放在阶段 2 持久化之前最划算，否则要为单调 id 先落一份映射、随后再废弃。
 
@@ -321,5 +333,5 @@ onLeave   : vectorIndex_->remove(id)     // 不再需要 prompt 反查
 
 - 不要把 `id` 的单调递增写进验收标准或测试前提；测试应通过 `store_->size()` / `vectorIndex_->size()` 观察一致性，而不是断言 `nextId_` 的取值。
 - 持久化元数据除 `modelId` 外，预留"id 生成方式 / 哈希算法版本"，否则换算法后旧索引无法判定不可加载。
-- 重复 prompt 当前只是"已知限制"，OPT-001 后行为变为幂等；测试不要把"重复 put 产生两条"固化为预期。
+- 重复 prompt 现为覆盖写（§2.2），OPT-001 后变为"同 id 覆盖写"并在并发下也幂等；测试只应断言"同 prompt 只留最新一条、不占双份容量"，既不要断言具体 id，也不要把"重复 put 产生两条"固化为预期。
 - OPT-001 会改变 [§4.2](file:///home/louis/Documents/VSCodeProjects/CPlusPlusProjects/LouisCache/docs/design/02-architecture.md) 中"id 是唯一关联键"的语义（单调 → 内容派生），落地时需同步修订该节。

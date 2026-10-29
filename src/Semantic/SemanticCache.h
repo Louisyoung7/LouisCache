@@ -32,12 +32,12 @@ class SemanticCache {
     // 主构造：三个运行时依赖全部由调用方注册
     // 契约：store 必须是本缓存独占、新建且未设置过回调的实例
     SemanticCache(
-        Options options, std::shared_ptr<Embedder> embedder, std::unique_ptr<VectorIndex> vectorIndex,
+        Options options, std::shared_ptr<const Embedder> embedder, std::unique_ptr<VectorIndex> vectorIndex,
         std::unique_ptr<Policy<uint64_t, CacheEntry>> store
     );
     // 便捷构造：按 options.capacity 新建 LruCache， 转调主构造
     SemanticCache(
-        Options options, std::shared_ptr<Embedder> embedder, std::unique_ptr<VectorIndex> vectorIndex
+        Options options, std::shared_ptr<const Embedder> embedder, std::unique_ptr<VectorIndex> vectorIndex
     );
     // store_ 的回调捕获 this, 禁止拷贝/移动
     SemanticCache(const SemanticCache&) = delete;
@@ -78,7 +78,7 @@ inline int SemanticCache::clampCapacity(size_t capacity) {
 }
 
 inline SemanticCache::SemanticCache(
-    Options options, std::shared_ptr<Embedder> embedder, std::unique_ptr<VectorIndex> vectorIndex
+    Options options, std::shared_ptr<const Embedder> embedder, std::unique_ptr<VectorIndex> vectorIndex
 )
     : SemanticCache(
           options, embedder, std::move(vectorIndex),
@@ -86,7 +86,7 @@ inline SemanticCache::SemanticCache(
       ) {}
 
 inline SemanticCache::SemanticCache(
-    Options options, std::shared_ptr<Embedder> embedder, std::unique_ptr<VectorIndex> vectorIndex,
+    Options options, std::shared_ptr<const Embedder> embedder, std::unique_ptr<VectorIndex> vectorIndex,
     std::unique_ptr<Policy<uint64_t, CacheEntry>> store
 )
     : options_(options),
@@ -157,20 +157,32 @@ inline GetResult SemanticCache::get(const std::string& prompt) {
 }
 
 inline void SemanticCache::put(const std::string& prompt, const std::string& response) {
-    auto id = nextId_.fetch_add(1);
+    // 查 exactIndex_
+    std::optional<uint64_t> id{};
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        id = findExactLocked(prompt);
+    }
+    // 如果存在，先删除旧条目再写入
+    if (id) store_->remove(*id);
+
+    auto nextId = nextId_.fetch_add(1);
     {
         std::lock_guard<std::mutex> lock(mutex_);
         stats_.puts++;
     }
 
     // 先写入，如果写入失败直接返回
-    store_->put(id, {prompt, response});
-    if (!store_->exists(id)) return;
+    store_->put(nextId, {prompt, response});
+    if (!store_->exists(nextId)) return;
 
     // 再索引
-    vectorIndex_->add(id, embedder_->embed(prompt));
+    vectorIndex_->add(nextId, embedder_->embed(prompt));
     // 最后精确索引
-    exactIndex_[prompt] = id;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        exactIndex_[prompt] = nextId;
+    }
 }
 
 inline void SemanticCache::remove(const std::string& prompt) {
@@ -186,8 +198,8 @@ inline void SemanticCache::remove(const std::string& prompt) {
 inline void SemanticCache::onLeave(uint64_t id, const CacheEntry& entry, LeaveReason reason) {
     // 先删 VectorIndex
     vectorIndex_->remove(id);
-    // 再删 exactIndex_：仅当映射仍指向本条目，避免误删同 prompt 的新条目
     std::lock_guard<std::mutex> lock(mutex_);
+    // 再删 exactIndex_：仅当映射仍指向本条目，避免误删同 prompt 的新条目
     eraseExactIfMatchesLocked(entry.prompt, id);
     if (reason == LeaveReason::Evicted) {
         stats_.evictions++;
@@ -206,4 +218,11 @@ inline void SemanticCache::eraseExactIfMatchesLocked(const std::string& prompt, 
     auto it = exactIndex_.find(prompt);
     if (it != exactIndex_.end() && it->second == id) exactIndex_.erase(it);
 }
+
+inline CacheStats SemanticCache::stats() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return stats_;
+}
+
+inline size_t SemanticCache::size() const { return vectorIndex_->size(); }
 }  // namespace louis::cache
