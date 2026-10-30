@@ -22,7 +22,7 @@ SemanticCache 需要接入三类运行时对象：`Embedder`（向量化）、`V
 
 - DEC-001: 三个运行时依赖全部由构造函数注入。主构造签名为 `SemanticCache(Options, std::shared_ptr<const Embedder>, std::unique_ptr<VectorIndex>, std::unique_ptr<Policy<uint64_t, CacheEntry>>)`。
 - DEC-002: 用持有类型编码所有权契约：`Embedder` 用 `shared_ptr<const Embedder>`（允许共享）；`VectorIndex` 用 `unique_ptr`（必须独占）；`EntryStore` 用 `unique_ptr`（必须独占且由本缓存安装回调）。
-- DEC-003: `Options` 只保留可序列化的值配置（capacity / hitThreshold / searchK / exactIndexEnabled）；注入路径下 `capacity` 不生效，容量由注入的 store 决定。
+- DEC-003: `Options` 只保留可序列化的值配置（capacity / hitThreshold / searchK / exactQueryEnabled），且为构造期快照、运行期不可变；注入路径下 `capacity` 不生效，容量由注入的 store 决定。
 - DEC-004: 条目值类型提升为顶层 `CacheEntry { prompt, response }`，使外部能构造任意 `Policy<uint64_t, CacheEntry>` 实现。
 - DEC-005: 保留三参便捷构造，按 `options.capacity` 创建默认 `LruCache` 后转调主构造；策略切换由调用方选择具体类，TTL 通过注入 `TtlCache` 装饰器组合，二者都不进入核心类。
 - DEC-006: 若将来需要配置驱动的对象装配，放到 `server/` 层的 builder 实现（阶段 3），核心库不承担服务定位职责。

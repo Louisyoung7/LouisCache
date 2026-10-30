@@ -1,10 +1,13 @@
 #pragma once
 #include <atomic>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 #include "CacheStats.h"
 #include "Embedder.h"
@@ -106,19 +109,22 @@ inline SemanticCache::SemanticCache(
 }
 
 inline GetResult SemanticCache::get(const std::string& prompt) {
-    // 先查 exactIndex_
     std::optional<uint64_t> id{};
     CacheEntry entry{};
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        id = findExactLocked(prompt);
-    }
-    if (id && store_->get(*id, entry)) {
+
+    // 先查 exactIndex_
+    if (options_.exactQueryEnabled) {
         {
             std::lock_guard<std::mutex> lock(mutex_);
-            stats_.exactHits++;
+            id = findExactLocked(prompt);
         }
-        return {true, entry.response, 1.0f, true};
+        if (id && store_->get(*id, entry)) {
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                stats_.exactHits++;
+            }
+            return {true, entry.response, 1.0f, true};
+        }
     }
 
     // 没有再查 VectorIndex
@@ -163,36 +169,56 @@ inline void SemanticCache::put(const std::string& prompt, const std::string& res
         std::lock_guard<std::mutex> lock(mutex_);
         id = findExactLocked(prompt);
     }
+
     // 如果存在，先删除旧条目再写入
     if (id) store_->remove(*id);
 
+    // 生成新 ID
     auto nextId = nextId_.fetch_add(1);
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        stats_.puts++;
-    }
 
     // 先写入，如果写入失败直接返回
     store_->put(nextId, {prompt, response});
     if (!store_->exists(nextId)) return;
 
     // 再索引
-    vectorIndex_->add(nextId, embedder_->embed(prompt));
+    try {
+        std::vector<float> embedding = embedder_->embed(prompt);
+        vectorIndex_->add(nextId, embedding);
+    } catch (...) {
+        store_->remove(nextId);
+        return;
+    }
+
     // 最后精确索引
     {
         std::lock_guard<std::mutex> lock(mutex_);
         exactIndex_[prompt] = nextId;
     }
+
+    // 统计 put 操作
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        stats_.puts++;
+    }
+
+    // 如果写入失败，删除向量和精确映射
+    if (!store_->exists(nextId)) {
+        vectorIndex_->remove(nextId);
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            eraseExactIfMatchesLocked(prompt, nextId);
+        }
+    }
 }
 
 inline void SemanticCache::remove(const std::string& prompt) {
-    auto it = exactIndex_.end();
+    std::optional<uint64_t> id{};
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        it = exactIndex_.find(prompt);
+        id = findExactLocked(prompt);
     }
-    if (it == exactIndex_.end()) return;
-    store_->remove(it->second);  // 回调 onLeave(Explicit) 统一删向量 + 精确映射
+    if (!id) return;
+    store_->remove(*id);  // 回调 onLeave(Explicit) 统一删向量 + 精确映射
 }
 
 inline void SemanticCache::onLeave(uint64_t id, const CacheEntry& entry, LeaveReason reason) {
@@ -224,5 +250,5 @@ inline CacheStats SemanticCache::stats() const {
     return stats_;
 }
 
-inline size_t SemanticCache::size() const { return vectorIndex_->size(); }
+inline size_t SemanticCache::size() const { return store_->size(); }
 }  // namespace louis::cache

@@ -346,16 +346,16 @@ class TtlCache : public Policy<Key, Value> {
 
 **职责要点**：
 
-- **`Options` 四项**：`capacity`（`EntryStore` 容量，经 `Policy::capacity` 下发）/ `hitThreshold`（语义命中阈值，策略层的**操作点**）/ `searchK`（ANN 取 top-k，取 `k > 1` 给歧义策略留口，见 [§3.5.3](#353-vectorindex--bruteforceindex--已实现)）/ `exactIndexEnabled`（是否启用第 0 步精确匹配）。
-- **`CacheStats` 六个口径**：`exactHits` / `semanticHits` **分开计数**——第 0 步命中与语义命中成本不同，混在一起就看不出精确索引是否值回票价；`puts` / `misses` 反映吞吐与命中率；`evictions` / `expirations` 来自 `LeaveCallback`、按 `LeaveReason` 分类计数（见 [§4.1](03-design-decisions.md#41-一致性枢纽leavecallback-是唯一清理出口)）。
-- **写者单一**：`options_` 与 `stats_` 同属语义层锁保护的元数据，只在 `SemanticCache` 内维护（见 [§4.4](03-design-decisions.md#44-锁序持有语义层锁时不得调用-entrystore)）；`stats()` 对外返回**快照**。
+- **`Options` 四项**：`capacity`（`EntryStore` 容量，经 `Policy::capacity` 下发）/ `hitThreshold`（语义命中阈值，策略层的**操作点**）/ `searchK`（ANN 取 top-k，取 `k > 1` 给歧义策略留口，见 [§3.5.3](#353-vectorindex--bruteforceindex--已实现)）/ `exactQueryEnabled`（是否启用第 0 步精确匹配，只作用于 `get` 读路径）。
+- **`CacheStats` 六个口径**：`exactHits` / `semanticHits` **分开计数**——第 0 步命中与语义命中成本不同，混在一起就看不出精确索引是否值回票价；命中率 = `(exactHits + semanticHits) / (exactHits + semanticHits + misses)`，`misses` 才是读侧的第三个落点，`puts` 是写侧的成功写入次数（含覆盖写），不参与命中率分母；`evictions` / `expirations` 来自 `LeaveCallback`、按 `LeaveReason` 分类计数（见 [§4.1](03-design-decisions.md#41-一致性枢纽leavecallback-是唯一清理出口)）。
+- **写者单一**：`stats_` 由语义层锁保护，只在 `SemanticCache` 内维护（见 [§4.4](03-design-decisions.md#44-锁序持有语义层锁时不得调用-entrystore)）；`options_` 是构造期快照、运行期只读，因此不参与锁序；`stats()` 对外返回**快照**。
 
 ```cpp
 struct Options {
     size_t capacity = 1000;         // EntryStore 容量
     float hitThreshold = 0.85f;     // 语义命中阈值
     size_t searchK = 5;             // ANN 搜索 K 个最近邻
-    bool exactIndexEnabled = true;  // 是否启用精确索引搜索
+    bool exactQueryEnabled = true;  // 是否启用精确查询（仅 get 读路径）
 };
 
 struct CacheStats {
@@ -364,7 +364,7 @@ struct CacheStats {
     uint64_t misses = 0;        // 未命中次数
     uint64_t evictions = 0;     // LeaveReason::Evicted
     uint64_t expirations = 0;   // LeaveReason::Expired
-    uint64_t puts = 0;
+    uint64_t puts = 0;          // 成功写入次数（含覆盖写）
 };
 ```
 

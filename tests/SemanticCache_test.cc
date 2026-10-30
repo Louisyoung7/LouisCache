@@ -25,7 +25,7 @@
 // 声明的契约（实现需保证）：
 //  1. 精确命中不得调用 Embedder::embed，也不得访问 VectorIndex。
 //  2. 语义命中：best.score >= hitThreshold 即命中，score 原样回传；
-//     exactIndexEnabled == false 时不得走精确路径。
+//     exactQueryEnabled == false 时不得走精确路径。
 //  3. 无幽灵命中：容量淘汰 / remove / TTL 过期后，同义 query 不再命中该条目，
 //     且 vectorIndex.size() 与 store.size() 稳定后必须相等。
 //  4. put 的失败/竞态不得留下「有向量无条目」或「有条目无向量」的残状态。
@@ -59,7 +59,7 @@ Options makeOptions(size_t capacity, float threshold = 0.85f, size_t searchK = 5
     o.capacity = capacity;
     o.hitThreshold = threshold;
     o.searchK = searchK;
-    o.exactIndexEnabled = exact;
+    o.exactQueryEnabled = exact;
     return o;
 }
 
@@ -179,16 +179,14 @@ using ManualTtlStore = TtlCache<uint64_t, CacheEntry, ManualClock>;
 TEST(SemanticCacheTest, NullEmbedderThrows) {
     std::shared_ptr<louis::cache::Embedder> noEmbedder;
     EXPECT_THROW(
-        SemanticCache(Options{}, noEmbedder, std::make_unique<BruteForceIndex>(kDim)),
-        std::invalid_argument
+        SemanticCache(Options{}, noEmbedder, std::make_unique<BruteForceIndex>(kDim)), std::invalid_argument
     );
 }
 
 TEST(SemanticCacheTest, NullVectorIndexThrows) {
     std::unique_ptr<VectorIndex> noIndex;
     EXPECT_THROW(
-        SemanticCache(Options{}, std::make_shared<HashEmbedder>(), std::move(noIndex)),
-        std::invalid_argument
+        SemanticCache(Options{}, std::make_shared<HashEmbedder>(), std::move(noIndex)), std::invalid_argument
     );
 }
 
@@ -300,7 +298,9 @@ TEST(SemanticCacheTest, SemanticHitReturnsResponseAndScore) {
 }
 
 TEST(SemanticCacheTest, UnrelatedQueryMisses) {
-    SemanticCache cache(makeOptions(4), std::make_shared<HashEmbedder>(), std::make_unique<BruteForceIndex>(kDim));
+    SemanticCache cache(
+        makeOptions(4), std::make_shared<HashEmbedder>(), std::make_unique<BruteForceIndex>(kDim)
+    );
     cache.put(kWeather, "晴");
 
     const GetResult r = cache.get(kUnrelated);
@@ -314,7 +314,9 @@ TEST(SemanticCacheTest, UnrelatedQueryMisses) {
 // 阈值比较是 >=：score 恰好等于阈值必须命中
 TEST(SemanticCacheTest, ScoreEqualToThresholdHits) {
     auto index = std::make_unique<BruteForceIndex>(4);
-    SemanticCache cache(makeOptions(4, /*threshold=*/1.0f), std::make_shared<ConstantEmbedder>(), std::move(index));
+    SemanticCache cache(
+        makeOptions(4, /*threshold=*/1.0f), std::make_shared<ConstantEmbedder>(), std::move(index)
+    );
     cache.put("a", "ra");
 
     const GetResult r = cache.get("b");  // 精确未命中，语义分数恒为 1.0
@@ -342,7 +344,9 @@ TEST(SemanticCacheTest, ScoreBelowThresholdMisses) {
 TEST(SemanticCacheTest, SearchKZeroMisses) {
     auto index = std::make_unique<CountingIndex>(kDim);
     auto* indexRaw = index.get();
-    SemanticCache cache(makeOptions(4, 0.85f, /*searchK=*/0), std::make_shared<HashEmbedder>(), std::move(index));
+    SemanticCache cache(
+        makeOptions(4, 0.85f, /*searchK=*/0), std::make_shared<HashEmbedder>(), std::move(index)
+    );
     cache.put(kWeather, "晴");
 
     const GetResult r = cache.get(kWeatherVariant);
@@ -354,13 +358,15 @@ TEST(SemanticCacheTest, SearchKZeroMisses) {
 
 // 统计口径：一次精确、一次语义、一次 miss 各计一次
 TEST(SemanticCacheTest, StatsSplitAcrossPaths) {
-    SemanticCache cache(makeOptions(8), std::make_shared<HashEmbedder>(), std::make_unique<BruteForceIndex>(kDim));
+    SemanticCache cache(
+        makeOptions(8), std::make_shared<HashEmbedder>(), std::make_unique<BruteForceIndex>(kDim)
+    );
     cache.put(kWeather, "晴");
     cache.put(kParis, "餐厅");
 
-    (void)cache.get(kWeather);        // 精确
-    (void)cache.get(kWeatherVariant); // 语义
-    (void)cache.get(kUnrelated);      // miss
+    (void)cache.get(kWeather);         // 精确
+    (void)cache.get(kWeatherVariant);  // 语义
+    (void)cache.get(kUnrelated);       // miss
 
     const auto st = cache.stats();
     EXPECT_EQ(st.puts, 2u);
@@ -401,7 +407,7 @@ TEST(SemanticCacheTest, CapacityZeroStoresNothingAndSkipsEmbeddingOnPut) {
     EXPECT_EQ(cache.size(), 0u);
     EXPECT_EQ(indexRaw->size(), 0u);
     EXPECT_EQ(embedder->calls.load(), 0) << "未驻留的 put 不应付出向量化成本";
-    EXPECT_EQ(cache.stats().puts, 1u);
+    EXPECT_EQ(cache.stats().puts, 0u) << "未驻留的 put 不计入成功写入";
 
     EXPECT_FALSE(cache.get(kWeather).hit);
     EXPECT_EQ(embedder->calls.load(), 1);
@@ -409,7 +415,9 @@ TEST(SemanticCacheTest, CapacityZeroStoresNothingAndSkipsEmbeddingOnPut) {
 
 // 精确命中会刷新 recency：A 被访问后，淘汰应落在 B 上
 TEST(SemanticCacheTest, ExactHitRefreshesRecency) {
-    SemanticCache cache(makeOptions(2), std::make_shared<HashEmbedder>(), std::make_unique<BruteForceIndex>(kDim));
+    SemanticCache cache(
+        makeOptions(2), std::make_shared<HashEmbedder>(), std::make_unique<BruteForceIndex>(kDim)
+    );
     cache.put(kWeather, "晴");
     cache.put(kParis, "餐厅");
     ASSERT_TRUE(cache.get(kWeather).exact);
@@ -441,7 +449,9 @@ TEST(SemanticCacheTest, RemoveErasesVectorAndExactMapping) {
 }
 
 TEST(SemanticCacheTest, RemoveUnknownOrRepeatedPromptIsNoop) {
-    SemanticCache cache(makeOptions(4), std::make_shared<HashEmbedder>(), std::make_unique<BruteForceIndex>(kDim));
+    SemanticCache cache(
+        makeOptions(4), std::make_shared<HashEmbedder>(), std::make_unique<BruteForceIndex>(kDim)
+    );
     EXPECT_NO_THROW(cache.remove("不存在的 prompt"));
 
     cache.put(kWeather, "晴");
@@ -480,7 +490,9 @@ TEST(SemanticCacheTest, DuplicatePutReplacesOldEntry) {
 
 // 重复 put 替换后只剩最新条目：语义路径也必须返回最新响应
 TEST(SemanticCacheTest, DuplicatePutSemanticHitReturnsLatestResponse) {
-    SemanticCache cache(makeOptions(2), std::make_shared<HashEmbedder>(), std::make_unique<BruteForceIndex>(kDim));
+    SemanticCache cache(
+        makeOptions(2), std::make_shared<HashEmbedder>(), std::make_unique<BruteForceIndex>(kDim)
+    );
     cache.put(kWeather, "旧的");
     cache.put(kWeather, "新的");
 
@@ -571,6 +583,7 @@ TEST(SemanticCacheTest, EvictionBetweenExistsAndAddLeavesOrphanVector) {
 }
 
 // put 先落 store、后算向量：embed 抛异常时条目已驻留但无向量、无精确映射
+// put 内部吞掉异常并回滚，故此处直接调用，验证回滚后的三份数据一致
 TEST(SemanticCacheTest, EmbedFailureMustNotLeaveResidentUnindexedEntry) {
     auto embedder = std::make_shared<ThrowingEmbedder>(2);
     auto index = std::make_unique<CountingIndex>(kDim);
@@ -582,14 +595,14 @@ TEST(SemanticCacheTest, EmbedFailureMustNotLeaveResidentUnindexedEntry) {
     cache.put(kWeather, "晴");
     ASSERT_EQ(cache.size(), 1u);
 
-    EXPECT_THROW(cache.put(kParis, "餐厅"), std::runtime_error);
+    cache.put(kParis, "餐厅");  // 第 2 次 embed 抛异常，put 内部回滚且不外抛
 
     EXPECT_EQ(cache.size(), 1u) << "失败的 put 不得留下未索引的条目";
     EXPECT_FALSE(storeRaw->exists(1u)) << "id=1 的条目应随 put 失败一并回滚";
     EXPECT_EQ(indexRaw->size(), cache.size());
 }
 
-// exactIndexEnabled == false 时 get 不得走精确路径
+// exactQueryEnabled == false 时 get 不得走精确路径
 TEST(SemanticCacheTest, ExactIndexDisabledSkipsExactPath) {
     auto embedder = std::make_shared<CountingEmbedder>();
     auto index = std::make_unique<CountingIndex>(kDim);
@@ -600,7 +613,7 @@ TEST(SemanticCacheTest, ExactIndexDisabledSkipsExactPath) {
     const int embedsAfterPut = embedder->calls.load();
     const GetResult r = cache.get(kWeather);
 
-    EXPECT_FALSE(r.exact) << "exactIndexEnabled=false 时仍走了精确路径";
+    EXPECT_FALSE(r.exact) << "exactQueryEnabled=false 时仍走了精确路径";
     EXPECT_EQ(embedder->calls.load(), embedsAfterPut + 1);
     EXPECT_EQ(indexRaw->searches.load(), 1);
     EXPECT_EQ(cache.stats().exactHits, 0u);
