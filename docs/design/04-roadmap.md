@@ -16,7 +16,7 @@
 
 **交付物（文件级）**：
 
-- [x] `src/Semantic/Embedder.h`：`Embedder` 接口 + `HashEmbedder`（确定性、可复现，仅供测试）——**已实现**：默认 `dim = 128`、`ngram = 2`，`modelId()` 形如 `hash-embedder:v1:fnv1a64:ngram=2:dim=128`（实现与算法见 [HashEmbedder 实现与算法详解](../HashEmbedder实现与算法详解.md)）
+- [x] `src/Semantic/Embedder.h`：`Embedder` 接口 + `HashEmbedder`（确定性、可复现，仅供测试）——**已实现**：默认 `dim = 128`、`ngram = 2`，`modelId()` 形如 `hash-embedder:v1:fnv1a64:ngram=2:dim=128`（实现与算法见 [HashEmbedder 实现与算法详解](../components/HashEmbedder实现与算法详解.md)）
 - [x] `src/Semantic/VectorIndex.h`：`VectorIndex` 接口 + `BruteForceIndex`（内部维护 `id → vector`；维度构造期固定，`add` 维度不符抛 `std::invalid_argument`，`search` 维度不符返回空、`k` 超界截断、并列分按 id 升序）——**已实现**
 - [ ] `src/Semantic/ExactIndex.h`：`prompt → id` 精确索引（若足够薄，可内联进 `SemanticCache`）
 - [ ] `src/Semantic/SemanticCache.h`：编排层，接口见 [总体架构 §3.5.1](02-architecture.md#351-semanticcache编排层--草案)
@@ -31,7 +31,7 @@
 
 - [ ] 精确命中路径**不调用** `Embedder::embed`（用计数型 mock embedder 断言调用次数为 0）
 - [ ] 语义命中路径：query 与已存 prompt 相似度 ≥ 阈值即命中，并在 `GetResult` 中回传 `score`
-  - 样本需配合 `HashEmbedder` 默认参数选取：默认 `ngram = 2` 下，短句（6–7 字，差 1 字）余弦 ≈ 0.87、长句（21–22 字，差 1 字）≈ 0.98、无关句 ≈ 0.00；默认阈值 `0.85` 在过短样本上余量有限，参考数值见 [HashEmbedder 实现与算法详解 §5.1](../HashEmbedder实现与算法详解.md)
+  - 样本需配合 `HashEmbedder` 默认参数选取：默认 `ngram = 2` 下，短句（6–7 字，差 1 字）余弦 ≈ 0.87、长句（21–22 字，差 1 字）≈ 0.98、无关句 ≈ 0.00；默认阈值 `0.85` 在过短样本上余量有限，参考数值见 [HashEmbedder 实现与算法详解 §5.1](../components/HashEmbedder实现与算法详解.md)
 - [ ] **无幽灵命中**：容量淘汰 / `remove` / TTL 过期后，同义 query 不再命中该条目（逐路径写用例）
 - [ ] **无漏清理**：`vectorIndex_->size()` 与 `store_.size()` 在任意操作序列后保持相等
 - [ ] 并发 `put` / `get` 下不崩、索引与存储不脱节（沿用阶段 0 的多线程测试写法）

@@ -43,7 +43,7 @@
 
 | 模块 | 现成方案 | 自研部分 |
 |---|---|---|
-| Embedding | ONNX Runtime + tokenizers-cpp，或 llama.cpp（GGUF，bge-small-zh-v1.5 / bge-m3） | 几十行 pooling + L2 归一化适配；`HashEmbedder` 测试件（确定性字节 n-gram 特征哈希，[实现与算法](../HashEmbedder实现与算法详解.md)）；`modelId()` 指纹 |
+| Embedding | ONNX Runtime + tokenizers-cpp，或 llama.cpp（GGUF，bge-small-zh-v1.5 / bge-m3） | 几十行 pooling + L2 归一化适配；`HashEmbedder` 测试件（确定性字节 n-gram 特征哈希，[实现与算法](../components/HashEmbedder实现与算法详解.md)）；`modelId()` 指纹 |
 | 向量索引 | hnswlib（头文件库，FetchContent） | 接口抽象 + `distance → similarity` 方向转换（挡在适配层内） |
 | 命中判定 | —— | 阈值判定、歧义策略——**这就是策略层** |
 | 淘汰 | 现有库 + `TtlCache` 装饰器 | 语义感知淘汰（阶段 3 差异化方向） |
@@ -149,7 +149,7 @@ class Embedder {
 
 **`HashEmbedder`（测试替身，已实现）**：确定性、可复现的**假向量生成器**，仅用于测试编排逻辑，**不代表语义质量**。
 
-- **算法（特征哈希 / hashing trick）**：滑动 n-gram → FNV-1a 64 位哈希 → 过 MurmurHash3 终结器 `mix` 做低位白化 → `% dim` 定桶、取符号位定正负 → 累加 → L2 归一化。算法细节见 [HashEmbedder 实现与算法详解](../HashEmbedder实现与算法详解.md)。
+- **算法（特征哈希 / hashing trick）**：滑动 n-gram → FNV-1a 64 位哈希 → 过 MurmurHash3 终结器 `mix` 做低位白化 → `% dim` 定桶、取符号位定正负 → 累加 → L2 归一化。算法细节见 [HashEmbedder 实现与算法详解](../components/HashEmbedder实现与算法详解.md)。
 - **带符号累加**：使向量均值 ≈ 0，cosine 近似「共享 n-gram 占比」——无关文本相互抵消而非恒正，贴合真实 embedding 的口径。
 - **确定性来源**：固定 FNV 偏移基数作初值、常量冻结，保证跨进程可复现；`dim` / `ngram` 参与 `modelId`，**改了它们就等于换了向量空间**。
 - **边界兜底**：长度不足 `ngram`（含空串）时退化为「整串单特征」，保证至少一个非零分量；累加恰好抵消为 0 时按整串哈希单桶重建，避免 cosine 出现 `0/0 = NaN`。
@@ -346,16 +346,16 @@ class TtlCache : public Policy<Key, Value> {
 
 **职责要点**：
 
-- **`Options` 四项**：`capacity`（`EntryStore` 容量，经 `Policy::capacity` 下发）/ `hitThreshold`（语义命中阈值，策略层的**操作点**）/ `searchK`（ANN 取 top-k，取 `k > 1` 给歧义策略留口，见 [§3.5.3](#353-vectorindex--bruteforceindex--已实现)）/ `exactIndexEnabled`（是否启用第 0 步精确匹配）。
-- **`CacheStats` 六个口径**：`exactHits` / `semanticHits` **分开计数**——第 0 步命中与语义命中成本不同，混在一起就看不出精确索引是否值回票价；`puts` / `misses` 反映吞吐与命中率；`evictions` / `expirations` 来自 `LeaveCallback`、按 `LeaveReason` 分类计数（见 [§4.1](03-design-decisions.md#41-一致性枢纽leavecallback-是唯一清理出口)）。
-- **写者单一**：`options_` 与 `stats_` 同属语义层锁保护的元数据，只在 `SemanticCache` 内维护（见 [§4.4](03-design-decisions.md#44-锁序持有语义层锁时不得调用-entrystore)）；`stats()` 对外返回**快照**。
+- **`Options` 四项**：`capacity`（`EntryStore` 容量，经 `Policy::capacity` 下发）/ `hitThreshold`（语义命中阈值，策略层的**操作点**）/ `searchK`（ANN 取 top-k，取 `k > 1` 给歧义策略留口，见 [§3.5.3](#353-vectorindex--bruteforceindex--已实现)）/ `exactQueryEnabled`（是否启用第 0 步精确匹配，只作用于 `get` 读路径）。
+- **`CacheStats` 六个口径**：`exactHits` / `semanticHits` **分开计数**——第 0 步命中与语义命中成本不同，混在一起就看不出精确索引是否值回票价；命中率 = `(exactHits + semanticHits) / (exactHits + semanticHits + misses)`，`misses` 才是读侧的第三个落点，`puts` 是写侧的成功写入次数（含覆盖写），不参与命中率分母；`evictions` / `expirations` 来自 `LeaveCallback`、按 `LeaveReason` 分类计数（见 [§4.1](03-design-decisions.md#41-一致性枢纽leavecallback-是唯一清理出口)）。
+- **写者单一**：`stats_` 由语义层锁保护，只在 `SemanticCache` 内维护（见 [§4.4](03-design-decisions.md#44-锁序持有语义层锁时不得调用-entrystore)）；`options_` 是构造期快照、运行期只读，因此不参与锁序；`stats()` 对外返回**快照**。
 
 ```cpp
 struct Options {
     size_t capacity = 1000;         // EntryStore 容量
     float hitThreshold = 0.85f;     // 语义命中阈值
     size_t searchK = 5;             // ANN 搜索 K 个最近邻
-    bool exactIndexEnabled = true;  // 是否启用精确索引搜索
+    bool exactQueryEnabled = true;  // 是否启用精确查询（仅 get 读路径）
 };
 
 struct CacheStats {
@@ -364,7 +364,7 @@ struct CacheStats {
     uint64_t misses = 0;        // 未命中次数
     uint64_t evictions = 0;     // LeaveReason::Evicted
     uint64_t expirations = 0;   // LeaveReason::Expired
-    uint64_t puts = 0;
+    uint64_t puts = 0;          // 成功写入次数（含覆盖写）
 };
 ```
 
