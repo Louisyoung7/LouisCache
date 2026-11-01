@@ -33,13 +33,18 @@ LouisCache 是一个高性能的 C++ 缓存库，实现了多种缓存替换策�
 
 ```
 LouisCache/
-├── docs/               # 设计文档
+├── docs/               # 核心库设计文档
 ├── src/                # 头文件目录
 │   ├── ARC/            # ARC 缓存实现
 │   ├── LFU/            # LFU 缓存实现
 │   ├── LRU/            # LRU 缓存实现
 │   └── Policy.h        # 缓存策略抽象接口
-├── tests/              # 单元测试（Google Test）
+├── modules/
+│   └── semantic/       # 可选模块：语义缓存（默认不编入）
+│       ├── include/Semantic/  # Embedder / VectorIndex / SemanticCache
+│       ├── tests/             # 模块独立测试
+│       └── docs/              # 模块设计文档
+├── tests/              # 核心库单元测试（Google Test）
 ├── conanfile.py        # Conan 依赖配置
 ├── CMakeLists.txt      # CMake 构建文件
 └── README.md           # 项目说明
@@ -81,6 +86,9 @@ cmake --build build
 
 # 运行测试
 ctest --test-dir build
+
+# 如需同时构建语义缓存模块与模块测试，追加开关
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TEST=ON -DLOUISCACHE_WITH_SEMANTIC=ON
 ```
 
 ## 使用示例
@@ -170,9 +178,13 @@ cache.put(3, "value3");  // 1 被淘汰，触发回调
 - **内部变动不通知**：复合结构中，条目在内部各部分间的流转对外不可见，不触发回调；只有条目真正"离开缓存"时才通知。例如 `LruKCache` 中历史队列的晋升与淘汰、`ArcCache` 中条目从 T1（LRU 部分）到 T2（LFU 部分）的迁移、以及幽灵缓存（B1/B2）自身的挤出与命中均静默
 - **ARC 特有语义**：`ArcCache` 中 T1、T2 任一主缓存部分发生容量驱逐均通知 `Evicted`；由于命中幽灵缓存会触发容量重划分、可能挤出对侧主缓存条目，因此 `get` 未命中也可能产生 `Evicted` 事件
 
+## 可选模块：语义缓存
+
+语义缓存（`get(prompt) / put(prompt, response)`）位于 `modules/semantic/`，通过公开的 `Policy` 接口单向依赖核心库，不改变核心库的零语义依赖。默认不编译，需显式开启 `LOUISCACHE_WITH_SEMANTIC`。模块设计与决策见 [语义缓存模块文档](modules/semantic/docs/design.md)。
+
 ## 测试
 
-单元测试基于 Google Test，覆盖各策略的基础行为、淘汰语义、LeaveCallback 触发与静默场景、回调重入安全及多线程并发，当前 175 个用例全部通过（见上文构建步骤）。
+单元测试基于 Google Test。核心库测试覆盖各策略的基础行为、淘汰语义、LeaveCallback 触发与静默场景、回调重入安全及多线程并发；语义模块测试随 `LOUISCACHE_WITH_SEMANTIC=ON` 一并构建。
 
 ## 缓存策略选择指南
 
