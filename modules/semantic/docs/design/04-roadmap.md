@@ -16,14 +16,14 @@
 
 **交付物（文件级）**：
 
-- [x] `src/Semantic/Embedder.h`：`Embedder` 接口 + `HashEmbedder`（确定性、可复现，仅供测试）——**已实现**：默认 `dim = 128`、`ngram = 2`，`modelId()` 形如 `hash-embedder:v1:fnv1a64:ngram=2:dim=128`（实现与算法见 [HashEmbedder 实现与算法详解](../components/HashEmbedder实现与算法详解.md)）
-- [x] `src/Semantic/VectorIndex.h`：`VectorIndex` 接口 + `BruteForceIndex`（内部维护 `id → vector`；维度构造期固定，`add` 维度不符抛 `std::invalid_argument`，`search` 维度不符返回空、`k` 超界截断、并列分按 id 升序）——**已实现**
-- [ ] `src/Semantic/ExactIndex.h`：`prompt → id` 精确索引（若足够薄，可内联进 `SemanticCache`）
-- [ ] `src/Semantic/SemanticCache.h`：编排层，接口见 [总体架构 §3.5.1](02-architecture.md#351-semanticcache编排层--草案)
-- [ ] `src/Semantic/Options.h` / `CacheStats.h`：配置与指标
+- [x] `include/Semantic/Embedder.h`：`Embedder` 接口 + `HashEmbedder`（确定性、可复现，仅供测试）——**已实现**：默认 `dim = 128`、`ngram = 2`，`modelId()` 形如 `hash-embedder:v1:fnv1a64:ngram=2:dim=128`（实现与算法见 [HashEmbedder 实现与算法详解](../components/HashEmbedder实现与算法详解.md)）
+- [x] `include/Semantic/VectorIndex.h`：`VectorIndex` 接口 + `BruteForceIndex`（内部维护 `id → vector`；维度构造期固定，`add` 维度不符抛 `std::invalid_argument`，`search` 维度不符返回空、`k` 超界截断、并列分按 id 升序）——**已实现**
+- [ ] `include/Semantic/ExactIndex.h`：`prompt → id` 精确索引（若足够薄，可内联进 `SemanticCache`）
+- [ ] `include/Semantic/SemanticCache.h`：编排层，接口见 [总体架构 §3.5.1](02-architecture.md#351-semanticcache编排层--草案)
+- [ ] `include/Semantic/Options.h` / `CacheStats.h`：配置与指标
 - [ ] `src/Ttl/TtlCache.h`：`Policy` 装饰器，惰性删除 + 可手动驱动的定期删除，产出 `LeaveReason::Expired`
-- [x] `tests/VectorIndex_test.cc`：22 个用例，覆盖构造期维度、`k` 截断、维度校验、并列分次序、幂等 `remove`、并发与 `HashEmbedder` 端到端阈值——**已实现**
-- [ ] `tests/SemanticCache_test.cc`、`tests/TtlCache_test.cc`
+- [x] `modules/semantic/tests/VectorIndex_test.cc`：22 个用例，覆盖构造期维度、`k` 截断、维度校验、并列分次序、幂等 `remove`、并发与 `HashEmbedder` 端到端阈值——**已实现**
+- [ ] `modules/semantic/tests/SemanticCache_test.cc`、`tests/TtlCache_test.cc`
 
 > 各模块的职责边界与接口见 [总体架构 §3.5](02-architecture.md#35-关键类职责与接口)，此处不再重复。
 
@@ -46,9 +46,9 @@
 
 **交付物**：
 
-- [ ] `src/Semantic/OnnxEmbedder.h` + CMake 开关 `LOUISCACHE_WITH_ONNX`：tokenizer-cpp 编码 → session 推理 → mean pooling → L2 归一化；`modelId()` 取模型文件内容哈希
+- [ ] `include/Semantic/OnnxEmbedder.h` + CMake 开关 `LOUISCACHE_WITH_ONNX`：tokenizer-cpp 编码 → session 推理 → mean pooling → L2 归一化；`modelId()` 取模型文件内容哈希
 - [ ] 中文场景跑通（bge-small-zh-v1.5），给出典型 query 的 top-k 与分数分布
-- [ ] `src/Semantic/HnswIndex.h` + 开关 `LOUISCACHE_WITH_HNSW`：hnswlib 接入，暴露 `M` / `efConstruction` / `efSearch` 调参
+- [ ] `include/Semantic/HnswIndex.h` + 开关 `LOUISCACHE_WITH_HNSW`：hnswlib 接入，暴露 `M` / `efConstruction` / `efSearch` 调参
 - [ ] `HnswIndex::remove` 用 tombstone（`markDelete`）+ 阈值触发紧凑化（重建），避免删除后搜索精度衰减
 - [ ] 索引持久化：保存索引 + 元数据（`dim` / `modelId` / 条目数）；加载时校验 `modelId`，不匹配则拒绝加载（向量空间不同不可比较）
 - [ ] 异步写入队列：`put` 入队、后台批量 `add`；明确与 `LeaveCallback` 的竞态（未落盘即被驱逐 → 索引无该向量，属安全侧）

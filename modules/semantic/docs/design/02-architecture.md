@@ -153,7 +153,7 @@ class Embedder {
 - **带符号累加**：使向量均值 ≈ 0，cosine 近似「共享 n-gram 占比」——无关文本相互抵消而非恒正，贴合真实 embedding 的口径。
 - **确定性来源**：固定 FNV 偏移基数作初值、常量冻结，保证跨进程可复现；`dim` / `ngram` 参与 `modelId`，**改了它们就等于换了向量空间**。
 - **边界兜底**：长度不足 `ngram`（含空串）时退化为「整串单特征」，保证至少一个非零分量；累加恰好抵消为 0 时按整串哈希单桶重建，避免 cosine 出现 `0/0 = NaN`。
-- 接口与实现见 [Embedder.h](../../src/Semantic/Embedder.h#L9-L37)。
+- 接口与实现见 [Embedder.h](../../include/Semantic/Embedder.h#L9-L37)。
 
 ### 3.5.3 `VectorIndex` / `BruteForceIndex` — 已实现
 
@@ -219,7 +219,7 @@ class BruteForceIndex : public VectorIndex {
 };
 ```
 
-> 接口落点见 [VectorIndex.h](../../src/Semantic/VectorIndex.h#L17-L52)；22 个契约用例见 [VectorIndex_test.cc](../../tests/VectorIndex_test.cc)。
+> 接口落点见 [VectorIndex.h](../../include/Semantic/VectorIndex.h#L17-L52)；22 个契约用例见 [VectorIndex_test.cc](../../tests/VectorIndex_test.cc)。
 
 ### 3.5.4 `ExactIndex` — 草案
 
@@ -292,7 +292,7 @@ class Policy {  // 阶段 0 已实现；EntryStore = Policy<uint64_t, Entry>
 };
 ```
 
-> 接口落点见 [Policy.h](../../src/Policy.h#L7-L47)。
+> 接口落点见 [Policy.h](../../../../src/Policy.h#L7-L47)。
 
 ### 3.5.6 `TtlCache` 装饰器 — 已实现
 
@@ -338,7 +338,7 @@ class TtlCache : public Policy<Key, Value> {
 };
 ```
 
-> 接口落点见 [TtlCache.h](../../src/Ttl/TtlCache.h#L13-L137)。
+> 接口落点见 [TtlCache.h](../../../../src/Ttl/TtlCache.h#L13-L137)。
 
 ### 3.5.7 `Options` / `CacheStats` — 已实现
 
@@ -368,7 +368,7 @@ struct CacheStats {
 };
 ```
 
-> 接口落点见 [Options.h](../../src/Semantic/Options.h#L6-L11) 与 [CacheStats.h](../../src/Semantic/CacheStats.h#L6-L13)。
+> 接口落点见 [Options.h](../../include/Semantic/Options.h#L6-L11) 与 [CacheStats.h](../../include/Semantic/CacheStats.h#L6-L13)。
 
 ---
 

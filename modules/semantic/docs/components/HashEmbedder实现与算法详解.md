@@ -1,6 +1,6 @@
 # HashEmbedder 实现与算法详解
 
-> **文档版本**：v0.1　|　**最近更新**：2026-10-18　|　**代码位置**：[src/Semantic/Embedder.h](../../src/Semantic/Embedder.h)　|　**关联**：[总体架构](../design/02-architecture.md) · [关键设计决策 §4.7](../design/03-design-decisions.md) · [概念入门](../design/00-primer.md) · [分阶段任务清单 阶段 1](../design/04-roadmap.md)
+> **文档版本**：v0.1　|　**最近更新**：2026-10-18　|　**代码位置**：[include/Semantic/Embedder.h](../../include/Semantic/Embedder.h)　|　**关联**：[总体架构](../design/02-architecture.md) · [关键设计决策 §4.7](../design/03-design-decisions.md) · [概念入门](../design/00-primer.md) · [分阶段任务清单 阶段 1](../design/04-roadmap.md)
 
 ---
 
@@ -8,13 +8,13 @@
 
 ## 一、它是什么，为什么存在
 
-`HashEmbedder` 是 [Embedder 接口](../../src/Semantic/Embedder.h) 的一个**测试替身**：它把文本转成固定长度的浮点向量，但**不代表任何语义质量**。
+`HashEmbedder` 是 [Embedder 接口](../../include/Semantic/Embedder.h) 的一个**测试替身**：它把文本转成固定长度的浮点向量，但**不代表任何语义质量**。
 
 它存在的理由写在 [关键设计决策 §4.7 零依赖原则](../design/03-design-decisions.md) 与 [贯穿性原则 5](../design/05-principles.md) 里：真实模型（ONNX Runtime / llama.cpp）是重依赖，一旦引入，单测就需要模型文件、算力甚至网络。而语义缓存真正复杂、最容易出错的部分是**编排逻辑**（精确命中先于 embedding、容量淘汰后的清理、TTL 过期、无幽灵命中）。用一个**确定、可复现、零依赖**的假 embedder，就能让这些逻辑在任意环境下被完整测通。
 
 真实的语义质量是**可替换件**，阶段 2 才接入（[概念入门 §5](../design/00-primer.md)、[分卷 04 阶段 2](../design/04-roadmap.md)）。
 
-它必须满足的契约就是 [Embedder](../../src/Semantic/Embedder.h) 的三个纯虚函数：
+它必须满足的契约就是 [Embedder](../../include/Semantic/Embedder.h) 的三个纯虚函数：
 
 | 接口 | 语义 | 对 HashEmbedder 的约束 |
 |---|---|---|
@@ -73,7 +73,7 @@ for each byte b:
     h = (h XOR b) * FNV_prime           // FNV_prime = 1099511628211 = 0x100000001b3
 ```
 
-对应实现见 `fnv1a`（[Embedder.h](../../src/Semantic/Embedder.h)，源码注释「FNV-1a 64 位」段）：
+对应实现见 `fnv1a`（[Embedder.h](../../include/Semantic/Embedder.h)，源码注释「FNV-1a 64 位」段）：
 
 ```cpp
 inline uint64_t HashEmbedder::fnv1a(const unsigned char* p, size_t n, uint64_t seed) {
@@ -222,7 +222,7 @@ cos(a, b) = (a · b) / (‖a‖ ‖b‖) = a · b
 
 ## 四、逐段代码解析
 
-代码集中在 [src/Semantic/Embedder.h](../../src/Semantic/Embedder.h)，位于命名空间 `louis::cache`，全部为 header-only（本项目是 INTERFACE 库，见 [src/CMakeLists.txt](../../src/CMakeLists.txt)）。
+代码集中在 [include/Semantic/Embedder.h](../../include/Semantic/Embedder.h)，位于命名空间 `louis::cache`，全部为 header-only（本项目是 INTERFACE 库，见 [src/CMakeLists.txt](../../../../src/CMakeLists.txt)）。
 
 **1. 接口 `Embedder`**——三个纯虚函数，`modelId` 的注释点明了它的用途（向量空间标识、加载时校验）。
 

@@ -1,6 +1,6 @@
 ## 〇、依赖装配约定
 
-三个运行时依赖由构造函数注入，`Options` 只保留值配置；决策理由与否决方案见 [ADR-0001](file:///home/louis/Documents/VSCodeProjects/CPlusPlusProjects/LouisCache/docs/adr/adr-0001-semantic-cache-dependency-injection.md)。
+三个运行时依赖由构造函数注入，`Options` 只保留值配置；决策理由与否决方案见 [ADR-0001](file:///home/louis/Documents/VSCodeProjects/CPlusPlusProjects/LouisCache/modules/semantic/docs/adr/adr-0001-semantic-cache-dependency-injection.md)。
 
 | 依赖 | 持有方式 | 契约 |
 |---|---|---|
@@ -10,7 +10,7 @@
 
 ## 一、类的声明
 
-`src/Semantic/SemanticCache.h`（改写现有 stub，唯一实现文件）：
+`modules/semantic/include/Semantic/SemanticCache.h`（唯一实现文件）：
 
 ```cpp
 #pragma once
@@ -180,7 +180,7 @@ SemanticCache cache(options, embedder, std::move(index), std::move(store));
 
 ### 2.2 `put(prompt, response)` — 覆盖写（upsert），先存储、后索引，并做写后复核
 
-同一 prompt 重复写入是覆盖而非追加，判重只以 `exactIndex_` 为依据（决策与否决方案见 [ADR-0002](file:///home/louis/Documents/VSCodeProjects/CPlusPlusProjects/LouisCache/docs/adr/adr-0002-duplicate-put-upsert.md)）。
+同一 prompt 重复写入是覆盖而非追加，判重只以 `exactIndex_` 为依据（决策与否决方案见 [ADR-0002](file:///home/louis/Documents/VSCodeProjects/CPlusPlusProjects/LouisCache/modules/semantic/docs/adr/adr-0002-duplicate-put-upsert.md)）。
 
 ```text
 [S]  old = exactIndex_.find(prompt)            // 与 get 一致：读路径只用 find
@@ -233,7 +233,7 @@ SemanticCache cache(options, embedder, std::move(index), std::move(store));
 
 ## 三、并发契约（实现时必须守住）
 
-- **锁序单一**：`mutex_` 只包住 `exactIndex_` / `stats_` 的读写；调用 `store_` 任何方法与 `vectorIndex_` 的任何方法前必须先放掉 `mutex_`（[§4.4](file:///home/louis/Documents/VSCodeProjects/CPlusPlusProjects/LouisCache/docs/design/03-design-decisions.md#L49-L55)）。否则 `store_->get()` 栈内的回调再取 `mutex_` 会自死锁。
+- **锁序单一**：`mutex_` 只包住 `exactIndex_` / `stats_` 的读写；调用 `store_` 任何方法与 `vectorIndex_` 的任何方法前必须先放掉 `mutex_`（[§4.4](file:///home/louis/Documents/VSCodeProjects/CPlusPlusProjects/LouisCache/modules/semantic/docs/design/03-design-decisions.md#L49-L55)）。否则 `store_->get()` 栈内的回调再取 `mutex_` 会自死锁。
 - **读路径也会触发回调**：ARC 的 `get` 未命中可能挤出对侧条目，因此 `get` 内不能假设"没有 `put` 就不会有回调"，所有 `mutex_` 作用域必须短到只覆盖一次 map/计数器操作。
 - **TOCTOU 一律判 miss**，不重试、不回滚重搜；`size()` 在并发下允许瞬时不等，稳定后应相等（验收口径）。
 - **回调是叶子**：不得再调用 `store_` 的任何方法；`onLeave` 只碰 `vectorIndex_` 与 `mutex_`。
@@ -330,7 +330,7 @@ onLeave   : vectorIndex_->remove(id)     // 不再需要 prompt 反查
 
 **OPT-003：合并存储与索引（pgvector / Redis 等）**
 
-[§4.8](file:///home/louis/Documents/VSCodeProjects/CPlusPlusProjects/LouisCache/docs/design/03-design-decisions.md) 已分析：能消掉进程内双存储，但外部中间件的淘汰通知异步、不保证投递，会重新打开幽灵命中窗口，属于"换个代价"而非免费优化。
+[§4.8](file:///home/louis/Documents/VSCodeProjects/CPlusPlusProjects/LouisCache/modules/semantic/docs/design/03-design-decisions.md) 已分析：能消掉进程内双存储，但外部中间件的淘汰通知异步、不保证投递，会重新打开幽灵命中窗口，属于"换个代价"而非免费优化。
 
 **OPT-004：共享 prompt 字符串（interning / string_view）**
 
@@ -341,4 +341,4 @@ onLeave   : vectorIndex_->remove(id)     // 不再需要 prompt 反查
 - 不要把 `id` 的单调递增写进验收标准或测试前提；测试应通过 `store_->size()` / `vectorIndex_->size()` 观察一致性，而不是断言 `nextId_` 的取值。
 - 持久化元数据除 `modelId` 外，预留"id 生成方式 / 哈希算法版本"，否则换算法后旧索引无法判定不可加载。
 - 重复 prompt 现为覆盖写（§2.2），OPT-001 后变为"同 id 覆盖写"并在并发下也幂等；测试只应断言"同 prompt 只留最新一条、不占双份容量"，既不要断言具体 id，也不要把"重复 put 产生两条"固化为预期。
-- OPT-001 会改变 [§4.2](file:///home/louis/Documents/VSCodeProjects/CPlusPlusProjects/LouisCache/docs/design/02-architecture.md) 中"id 是唯一关联键"的语义（单调 → 内容派生），落地时需同步修订该节。
+- OPT-001 会改变 [§4.2](file:///home/louis/Documents/VSCodeProjects/CPlusPlusProjects/LouisCache/modules/semantic/docs/design/02-architecture.md) 中"id 是唯一关联键"的语义（单调 → 内容派生），落地时需同步修订该节。

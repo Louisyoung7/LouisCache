@@ -58,7 +58,6 @@ LouisCache 目前是**纯头文件 C++17 缓存库**，只做**精确匹配**的
 
 - 原 §3.2 中「理由见 §4.3」→ [design/03-design-decisions.md §4.3](design/03-design-decisions.md#43-写入顺序先存储后索引)
 - 原 §5 阶段 0 中「见第二节」→ [design/01-baseline.md](design/01-baseline.md)
-- 外部文档 [ttl-cache-decorator-plan.md](ttl-cache-decorator-plan.md) 中的「design.md §4.1」→ [design/03-design-decisions.md §4.1](design/03-design-decisions.md#41-一致性枢纽leavecallback-是唯一清理出口)
 
 ## 文档维护约定
 
@@ -72,4 +71,4 @@ LouisCache 目前是**纯头文件 C++17 缓存库**，只做**精确匹配**的
 
 ---
 
-**关联文档**：[TtlCache 装饰器实现计划](ttl-cache-decorator-plan.md) · [为什么 ShardedLruCache 禁止拷贝和移动](components/为什么ShardedLruCache禁止拷贝和移动.md) · [HashEmbedder 实现与算法详解](components/HashEmbedder实现与算法详解.md)
+**关联文档**：[为什么 ShardedLruCache 禁止拷贝和移动](../../../docs/components/为什么ShardedLruCache禁止拷贝和移动.md) · [HashEmbedder 实现与算法详解](components/HashEmbedder实现与算法详解.md)
