@@ -12,6 +12,7 @@ class LouisCacheConan(ConanFile):
     def requirements(self):
         # Google Test 仅用于单元测试
         self.test_requires("gtest/1.14.0")
+        self.test_requires("benchmark/1.9.5")
 
     def layout(self):
         cmake_layout(self)
