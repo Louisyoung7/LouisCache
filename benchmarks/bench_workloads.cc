@@ -74,6 +74,8 @@ void benchReplay(benchmark::State& state, Context& ctx) {
     state.counters["hits_per_iter"] = static_cast<double>(hits) / iters;
     state.counters["misses_per_iter"] = static_cast<double>(misses) / iters;
     state.counters["evictions_per_iter"] = static_cast<double>(ctx.evictions) / iters;
+    // 回放结束时的驻留条目数：用于判断主缓存是否真的写满（未满则不会有淘汰）。
+    state.counters["cache_size"] = static_cast<double>(ctx.policy->size());
     // 命中率（百分比）。
     state.counters["hit_rate_pct"] = 100.0 * static_cast<double>(hits) / (iters * itemsPerIter);
     state.SetItemsProcessed(static_cast<std::int64_t>(state.iterations() *
