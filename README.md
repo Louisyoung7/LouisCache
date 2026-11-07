@@ -33,17 +33,18 @@ LouisCache 是一个高性能的 C++ 缓存库，实现了多种缓存替换策�
 
 ```
 LouisCache/
-├── docs/               # 核心库设计文档
+├── docs/               # 核心库设计文档与架构决策记录（docs/adr/）
 ├── src/                # 头文件目录
 │   ├── ARC/            # ARC 缓存实现
 │   ├── LFU/            # LFU 缓存实现
 │   ├── LRU/            # LRU 缓存实现
 │   └── Policy.h        # 缓存策略抽象接口
+├── benchmarks/         # 三层计时压测 + 命中率研究工具，详见 benchmarks/README.md
 ├── modules/
 │   └── semantic/       # 可选模块：语义缓存（默认不编入）
 │       ├── include/Semantic/  # Embedder / VectorIndex / SemanticCache
 │       ├── tests/             # 模块独立测试
-│       └── docs/              # 模块设计文档
+│       └── docs/              # 模块设计文档与模块级 ADR
 ├── tests/              # 核心库单元测试（Google Test）
 ├── conanfile.py        # Conan 依赖配置
 ├── CMakeLists.txt      # CMake 构建文件
@@ -88,7 +89,11 @@ cmake --build build
 ctest --test-dir build
 
 # 如需同时构建语义缓存模块与模块测试，追加开关
-cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TEST=ON -DLOUISCACHE_WITH_SEMANTIC=ON
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_TEST=ON -DWITH_SEMANTIC=ON
+
+# 压测与命中率研究工具（Google Benchmark 由 Conan 提供）
+cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_BENCHMARKS=ON
+cmake --build build
 ```
 
 ## 使用示例
@@ -180,17 +185,42 @@ cache.put(3, "value3");  // 1 被淘汰，触发回调
 
 ## 可选模块：语义缓存
 
-语义缓存（`get(prompt) / put(prompt, response)`）位于 `modules/semantic/`，通过公开的 `Policy` 接口单向依赖核心库，不改变核心库的零语义依赖。默认不编译，需显式开启 `LOUISCACHE_WITH_SEMANTIC`。模块设计与决策见 [语义缓存模块文档](modules/semantic/docs/design.md)。
+语义缓存（`get(prompt) / put(prompt, response)`）位于 `modules/semantic/`，通过公开的 `Policy` 接口单向依赖核心库，不改变核心库的零语义依赖。默认不编译，需显式开启 `WITH_SEMANTIC`。模块设计与决策见 [语义缓存模块文档](modules/semantic/docs/design.md)。
 
 ## 测试
 
-单元测试基于 Google Test。核心库测试覆盖各策略的基础行为、淘汰语义、LeaveCallback 触发与静默场景、回调重入安全及多线程并发；语义模块测试随 `LOUISCACHE_WITH_SEMANTIC=ON` 一并构建。
+单元测试基于 Google Test。核心库测试覆盖各策略的基础行为、淘汰语义、LeaveCallback 触发与静默场景、回调重入安全及多线程并发；语义模块测试随 `WITH_SEMANTIC=ON` 一并构建。
+
+## 性能压测与命中率研究
+
+压测分三层计时基准（单操作、trace 回放、多线程分片对比）加一个不计时的命中率研究工具，共 168 个基准。设计口径、完整数据与结论见 [benchmarks/README.md](benchmarks/README.md)。
+
+```bash
+# 三层计时压测（168 个基准）
+./build/Release/bin/benchs
+
+# 命中率研究：容量从访问域的 1/64 扫到 1/1 × 6 种分布 × 6 策略，
+# 不计时只统计，约 7 秒确定性跑完；CSV 路径由第一个参数指定
+./build/Release/bin/hitrate_study
+```
+
+几条主要结论（完整数据与局限见 benchmarks/README.md）：
+
+- **分片伸缩性与缓存算法无关**：8 线程下吞吐随分片数单调上升，S16 相对全局锁 **Lru 家族 5.8×、Lfu 家族 3.5×**（Zipf）；默认 4 片不是最优，只是成本与粒度的折中
+- **没有全能策略**：Lru 综合最强；Lfu 用速度换命中率；LruK 只在扫描污染 + 稳态长 trace 下兑现，其余场景 k=2 的首次 miss 是净亏损；Arc 的实现复杂度换不来可测量的净收益
+- **容量比例是命中率的第一变量**：小容量档（≤12.5%）LruK/Lfu/Arc 领先 Lru 约 11 点，大容量档收窄到 3 点内——"哪个策略命中率更高"必须带上容量比例才成立
+
+多线程压测 harness 为什么自建线程池而不用 Google Benchmark 的 `Threads(n)`，见 [ADR-0001](docs/adr/adr-0001-benchmark-thread-pool.md)。
 
 ## 缓存策略选择指南
 
-- **LRU**：适用于访问模式具有时间局部性的场景
-- **LFU**：适用于访问模式具有频率局部性的场景
-- **ARC**：自动适应访问模式，适用于大多数场景
+以下建议均来自 benchmarks/README.md 的实测数据（口径与数据以该文档为准）：
+
+- **LRU**：访问模式具有时间局部性场景的默认选择，单操作最快、综合命中率最均衡
+- **ShardedLruCache**：多线程高并发下首选，8 线程相对单锁 5.8×（Zipf）/ 7.3×（Uniform）
+- **LFU / ShardedLfuCache**：频率局部性强、命中率优先于吞吐的场景；命中路径比 Lru 贵约 6 成（锁内更新频次），换来更高的稳态命中率（容量越小差距越大），高并发下分片收益也打折（3.5×）
+- **LruKCache**：仅在存在扫描污染（整表扫描、周期性冷扫描）且 trace 足够长时使用；无扫描负载下 k=2 的首次 miss 成本是净亏损
+- **ARC**：实测收益几乎无法兑现（仅一个负载档位拿到全场最佳，其余被更简单的策略压制，且在满容量循环扫描下有结构性抖动），建议只在"未知负载保险"的论点上考虑
 
 ## 线程安全性
 

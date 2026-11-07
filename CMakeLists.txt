@@ -19,7 +19,7 @@ endif()
 
 add_subdirectory(src)
 
-# 语义缓存可选模块，默认关闭；核心库不依赖它
+# 压测与命中率研究工具，默认关闭；Google Benchmark 由 Conan 提供
 option(BUILD_BENCHMARKS "Build benchmarks" OFF)
 if(BUILD_BENCHMARKS)
     add_subdirectory(benchmarks)
