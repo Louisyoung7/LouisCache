@@ -38,24 +38,28 @@ inline constexpr std::string_view kPolicyNames[] = {
     "Lru", "LruK", "ShardedLru", "Lfu", "ShardedLfu", "Arc",
 };
 
-inline std::unique_ptr<Policy> makePolicy(std::string_view name) {
+// sliceNum 只对分片策略生效，其余策略忽略该参数。
+// capacity 允许调用方覆盖默认容量（命中率研究按容量比例扫描）；
+// 各策略沿用 kCapacity 注释里的容量口径，LruK 的历史队列跟随主容量。
+inline std::unique_ptr<Policy> makePolicy(std::string_view name, int sliceNum = kSliceNum,
+                                          std::size_t capacity = kCapacity) {
     if (name == "Lru") {
-        return std::make_unique<louis::cache::LruCache<Key, Value>>(static_cast<int>(kCapacity));
+        return std::make_unique<louis::cache::LruCache<Key, Value>>(static_cast<int>(capacity));
     }
     if (name == "LruK") {
-        return std::make_unique<louis::cache::LruKCache<Key, Value>>(kCapacity, kLruKHistoryCapacity);
+        return std::make_unique<louis::cache::LruKCache<Key, Value>>(capacity, capacity);
     }
     if (name == "ShardedLru") {
-        return std::make_unique<louis::cache::ShardedLruCache<Key, Value>>(kCapacity, kSliceNum);
+        return std::make_unique<louis::cache::ShardedLruCache<Key, Value>>(capacity, sliceNum);
     }
     if (name == "Lfu") {
-        return std::make_unique<louis::cache::LfuCache<Key, Value>>(kCapacity);
+        return std::make_unique<louis::cache::LfuCache<Key, Value>>(capacity);
     }
     if (name == "ShardedLfu") {
-        return std::make_unique<louis::cache::ShardedLfuCache<Key, Value>>(kCapacity, kSliceNum);
+        return std::make_unique<louis::cache::ShardedLfuCache<Key, Value>>(capacity, sliceNum);
     }
     if (name == "Arc") {
-        return std::make_unique<louis::cache::ArcCache<Key, Value>>(kCapacity);
+        return std::make_unique<louis::cache::ArcCache<Key, Value>>(capacity);
     }
     throw std::invalid_argument("unknown policy: " + std::string(name));
 }
